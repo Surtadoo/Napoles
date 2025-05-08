@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NAPOLES ROLEPLAY</title>
+    <style>
+        :root {
+            --primary: #1a8d1a;
+            --secondary: #25c425;
+            --dark: #0a550a;
+            --light: #e0ffe0;
+            --accent: #25c425;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #0f0f0f;
+            color: #ffffff;
+            line-height: 1.6;
+        }
+        
+        header {
+            background: linear-gradient(135deg, var(--dark), var(--primary));
+            padding: 1rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        
+        .container {
+            width: 90%;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .logo {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: white;
+            text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+        
+        .logo span {
+            color: var(--accent);
+        }
+        
+        nav ul {
+            display: flex;
+            list-style: none;
+        }
+        
+        nav li {
+            margin-left: 1.5rem;
+        }
+        
+        nav a {
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1.1rem;
+            transition: color 0.3s;
+        }
+        
+        nav a:hover {
+            color: var(--accent);
+        }
+        
+        .hero {
+            height: 500px;
+            background: url('/api/placeholder/1200/500') center/cover;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            max-width: 800px;
+            padding: 2rem;
+        }
+        
+        .hero h1 {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+            color: white;
+            text-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
+        }
+        
+        .hero p {
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+            color: #f0f0f0;
+        }
+        
+        .btn {
+            display: inline-block;
+            background-color: var(--primary);
+            color: white;
+            padding: 0.8rem 1.5rem;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+            margin: 0.5rem;
+        }
+        
+        .btn:hover {
+            background-color: var(--secondary);
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .btn-outline {
+            background-color: transparent;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-outline:hover {
+            background-color: var(--primary);
+            color: white;
+        }
+        
+        .features {
+            padding: 5rem 0;
+            background-color: #151515;
+        }
+        
+        .section-title {
+            text-align: center;
+            margin-bottom: 3rem;
+            color: var(--light);
+        }
+        
+        .section-title h2 {
+            font-size: 2.5rem;
+            position: relative;
+            display: inline-block;
+            padding-bottom: 1rem;
+        }
+        
+        .section-title h2::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 4px;
+            background-color: var(--primary);
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+        
+        .feature-card {
+            background-color: #1a1a1a;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            transition: transform 0.3s ease;
+            border-bottom: 4px solid var(--primary);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-10px);
+        }
+        
+        .feature-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1.5rem;
+            background-color: var(--primary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            color: white;
+        }
+        
+        .feature-card h3 {
+            margin-bottom: 1rem;
+            color: var(--light);
+        }
+        
+        .server-info {
+            padding: 5rem 0;
+            background: linear-gradient(135deg, #121212, #1c1c1c);
+        }
+        
+        .info-container {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 2rem;
+        }
+        
+        .info-text {
+            flex: 1;
+            min-width: 300px;
+        }
+        
+        .info-text h2 {
+            margin-bottom: 1.5rem;
+            color: var(--light);
+            font-size: 2.2rem;
+        }
+        
+        .info-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        
+        .stat-card {
+            background-color: var(--dark);
+            padding: 1.5rem;
+            border-radius: 8px;
+            flex: 1;
+            min-width: 150px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .stat-card h3 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--accent);
+        }
+        
+        .info-image {
+            flex: 1;
+            min-width: 300px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        .info-image img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .gallery {
+            padding: 5rem 0;
+            background-color: #151515;
+        }
+        
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        
+        .gallery-item {
+            height: 200px;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .gallery-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+        
+        .gallery-item:hover img {
+            transform: scale(1.1);
+        }
+        
+        .staff {
+            padding: 5rem 0;
+            background: linear-gradient(135deg, #121212, #1c1c1c);
+        }
+        
+        .staff-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 2rem;
+        }
+        
+        .staff-card {
+            background-color: #1a1a1a;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .staff-card:hover {
+            transform: translateY(-10px);
+        }
+        
+        .staff-image {
+            height: 250px;
+            position: relative;
+        }
+        
+        .staff-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .staff-info {
+            padding: 1.5rem;
+            text-align: center;
+        }
+        
+        .staff-info h3 {
+            margin-bottom: 0.5rem;
+            color: var(--light);
+        }
+        
+        .staff-info p.role {
+            color: var(--secondary);
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        
+        .cta {
+            padding: 5rem 0;
+            background: url('/api/placeholder/1200/400') center/cover;
+            position: relative;
+            text-align: center;
+        }
+        
+        .cta::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+        }
+        
+        .cta-content {
+            position: relative;
+            z-index: 1;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .cta h2 {
+            font-size: 2.5rem;
+            margin-bottom: 1.5rem;
+            color: white;
+        }
+        
+        .cta p {
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+            color: #f0f0f0;
+        }
+        
+        .server-address {
+            background-color: rgba(10, 85, 10, 0.8);
+            padding: 1rem;
+            border-radius: 4px;
+            display: inline-block;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: white;
+            margin-bottom: 2rem;
+        }
+        
+        footer {
+            background-color: #0a0a0a;
+            padding: 3rem 0;
+            text-align: center;
+        }
+        
+        .footer-content {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+        
+        .footer-logo {
+            font-size: 2rem;
+            font-weight: bold;
+            color: white;
+        }
+        
+        .footer-logo span {
+            color: var(--primary);
+        }
+        
+        .footer-links ul {
+            display: flex;
+            justify-content: center;
+            list-style: none;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+        }
+        
+        .footer-links a {
+            color: #ccc;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        
+        .footer-links a:hover {
+            color: var(--primary);
+        }
+        
+        .social-links {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+        
+        .social-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            background-color: #333;
+            border-radius: 50%;
+            color: white;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+        
+        .social-icon:hover {
+            background-color: var(--primary);
+            transform: translateY(-3px);
+        }
+        
+        .copyright {
+            margin-top: 2rem;
+            color: #777;
+        }
+        
+        @media (max-width: 768px) {
+            .logo-container {
+                flex-direction: column;
+                text-align: center;
+            }
+            
+            nav ul {
+                margin-top: 1rem;
+                justify-content: center;
+            }
+            
+            nav li {
+                margin: 0 0.75rem;
+            }
+            
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+            
+            .section-title h2 {
+                font-size: 2rem;
+            }
+            
+            .features-grid,
+            .staff-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="logo-container">
+                <div class="logo">TZUNE <span>RPG</span></div>
+                <nav>
+                    <ul>
+                        <li><a href="#home">Início</a></li>
+                        <li><a href="#features">Infos</a></li>
+                        <li><a href="#server-info">Servidor</a></li>
+                        <li><a href="#staff">Equipe</a></li>
+                        <li><a href="#join">Conexão</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <section id="home" class="hero">
+        <div class="hero-content">
+            <h1>TZUNE SA-MP</h1>
+            <p>O melhor servidor ou uns dos Melhores de rpg do SA-MP. Venha viver uma nova experiência com uma comunidade incrível e recursos exclusivos!</p>
+            <div>
+                <a href="#join" class="btn">JOGAR AGORA</a>
+                <a href="#features" class="btn btn-outline">SABER MAIS</a>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="features">
+        <div class="container">
+            <div class="section-title">
+                <h2>INFORMAÇÕES</h2>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🏙️</div>
+                    <h3>MIDNIGHT RPG</h3>
+                    <p>Cidade que Veio Para Divertir o seu dia a dia no SA-MP.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">💼</div>
+                    <h3>Empregos</h3>
+                    <p>Escolha entre dezenas de profissões legais e ilegais para ganhar a vida no T-Zune.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🏠</div>
+                    <h3>Propriedades</h3>
+                    <p>Compre casas, apartamentos e empresas.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🚗</div>
+                    <h3>Veículos</h3>
+                    <p>Centenas de veículos exclusivos com sistema de personalização e veiculos de inventário permanentes.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">👮</div>
+                    <h3>Organizações</h3>
+                    <p>Entre para a polícia, bombeiros, médicos ou organizações criminosas com sistema de rank.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🛠️</div>
+                    <h3>Atualizações</h3>
+                    <p>Desenvolvido constantemente com novos recursos e melhorias baseados no feedback da comunidade.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="server-info" class="server-info">
+        <div class="container">
+            <div class="info-container">
+                <div class="info-text">
+                    <h2>Sobre Nosso Servidor</h2>
+                    <p>O Tzune é um servidor de SA-MP focado em oferecer a melhor experiência RPG possível. Nossa equipe trabalha diariamente para criar um ambiente divertido e acolhedor para todos os jogadores.</p>
+                    <p>Com sistemas exclusivos desenvolvidos por nossa equipe, oferecemos recursos incríveis que você vai adorar!</p>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="staff" class="staff">
+        <div class="container">
+            <div class="section-title">
+                <h2>Nossa Equipe</h2>
+            </div>
+            <div class="staff-grid">
+                <div class="staff-card">
+                    <div class="staff-image">
+                        <img src="https://i.ibb.co/zWCw2ctf/fb9dd846661348bc976b85e6173891d0.png" alt="Tvzinho">
+                    </div>
+                    <div class="staff-info">
+                        <h3>Tvzinho ArKzX</h3>
+                        <p class="role">Programador Geral</p>
+                        <p>Criador do Tzune<br>Responsável Geral Pela GameMode</p>
+                    </div>
+                </div>
+                <div class="staff-card">
+                    <div class="staff-image">
+                        <img src="https://i.ibb.co/1YpHKdZq/f8d9c5f40c4b8c457534c1f754bbe5d4.png" alt="Crazy">
+                    </div>
+                    <div class="staff-info">
+                        <h3>Crazy ArKzX</h3>
+                        <p class="role">Dono</p>
+                        <p>Criador do Tzune<br>Responsável Geral Pelo Servidor</p>
+                    </div>
+                   </div>
+                <div class="staff-card">
+                    <div class="staff-image">
+                        <img src="https://i.ibb.co/V0SxLpWX/a80b8578f9cf44363471cb9845a3bdd2.png" alt="Hazard">
+                    </div>
+                    <div class="staff-info">
+                        <h3>Hazard</h3>
+                        <p class="role">Programador e TextDrawer</p>
+                        <p>Responsável Pela Criação de Sistemas e TextDraws</p>
+                    </div>
+                </div>
+                <div class="staff-card">
+                    <div class="staff-image">
+                        <img src="https://i.ibb.co/cSL4HBq9/download.jpg" alt="Ghost">
+                    </div>
+                    <div class="staff-info">
+                        <h3>Ghost</h3>
+                        <p class="role">Programador Geral & Textdraw Maker</p>
+                        <p>Responsável Geral do Servidor</p>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="join" class="cta">
+        <div class="container">
+            <div class="cta-content">
+                <h2>Pronto para Jogar?</h2>
+                <p>Entre Agora no Tzune e Faça Parte Dessa Incrível Comunidade!</p>
+                <div class="server-address">
+                    IP: 190.102.42.40:7793
+                </div>
+                <div>
+                    <a href="https://play.google.com/store/apps/details?id=ru.unisamp_mobile.launcher" class="btn">DOWNLOAD</a>
+                    <a href="https://discord.gg/B2fEA3R9r9" class="btn">DISCORD</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-logo">
+                    TZUNE <span>RPG</span>
+                </div>
+                <div class="footer-links">
+                    <ul>
+                        <li><a href="#home">Início</a></li>
+                        <li><a href="#features">Infos</a></li>
+                        <li><a href="#server-info">Servidor</a></li>
+                        <li><a href="#staff">Equipe</a></li>
+                        <li><a href="https://discord.gg/B2fEA3R9r9">Regras</a></li>
+                    </ul>
+                </div>
+                <div class="social-links">
+                    <a href="https://discord.gg/B2fEA3R9r9" class="social-icon">D</a>
+                    <a href="https://chat.whatsapp.com/GF7E758gHTMLTxIn2eFx6S" class="social-icon">W</a>
+                    <a href="https://www.youtube.com/@tzune-rpg" class="social-icon">Y</a>
+                </div>
+                <div class="copyright">
+                    &copy; 2025 Tzune RPG. Todos os direitos reservados.
+                </div>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
