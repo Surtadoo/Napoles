@@ -10,13 +10,24 @@ import { VideoSourceModal } from './components/VideoSourceModal';
 import { YouTubeModal } from './components/YouTubeModal';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
+import { NamePromptModal } from './components/NamePromptModal';
 import { Participant, ChatMessage, StreamState } from './types';
+import { initAntiInspectionAndProtection } from './utils/security';
 
 export function App() {
+  // Anti-inspection and code protection on start
+  useEffect(() => {
+    initAntiInspectionAndProtection();
+  }, []);
+
   // Room State
   const [roomName] = useState('Time_do_Sky');
   const [roomCode] = useState('489059');
   const [isPrivate] = useState(true);
+
+  // User Name prompt modal
+  const [currentUserName, setCurrentUserName] = useState<string>('');
+  const [isNameModalOpen, setIsNameModalOpen] = useState(true);
 
   // Audio / Media Controls State
   const [isMuted, setIsMuted] = useState(true);
@@ -42,32 +53,12 @@ export function App() {
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Participants State
-  const [participants, setParticipants] = useState<Participant[]>([
-    {
-      id: '1',
-      name: 'Surtado',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
-      isOwner: true,
-      isMuted: true,
-      isSpeaking: false,
-      isScreenSharing: false,
-      tag: 'você',
-    },
-    {
-      id: '2',
-      name: 'Zuck.js',
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop&crop=face',
-      isGuest: true,
-      isMuted: false,
-      isSpeaking: false,
-      tag: 'guest',
-    },
-  ]);
+  // Participants State - starts empty until the user enters their name!
+  const [participants, setParticipants] = useState<Participant[]>([]);
 
   // Chat State
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [userPoints, setUserPoints] = useState(0);
+  const [userPoints, setUserPoints] = useState(150);
   const [streamerMode, setStreamerMode] = useState(false);
 
   // Modals State
@@ -88,11 +79,33 @@ export function App() {
     }, 4000);
   };
 
+  // When user enters their name
+  const handleUserJoin = (userName: string) => {
+    setCurrentUserName(userName);
+    setIsNameModalOpen(false);
+
+    // Add user as the primary participant
+    const userParticipant: Participant = {
+      id: 'current-user',
+      name: userName,
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
+      isOwner: true,
+      isMuted: true,
+      isSpeaking: false,
+      isScreenSharing: false,
+      tag: 'você',
+    };
+
+    setParticipants([userParticipant]);
+    addSystemMessage(`${userName} entrou na sala privada.`);
+    showToast(`Bem-vindo à sala, ${userName}!`);
+  };
+
   // Sync participant status
   useEffect(() => {
     setParticipants((prev) =>
       prev.map((p) => {
-        if (p.id === '1') {
+        if (p.id === 'current-user') {
           return {
             ...p,
             isMuted,
@@ -109,8 +122,8 @@ export function App() {
   const handleStartScreenShare = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-        showToast('Compartilhamento de tela não suportado diretamente neste navegador. Iniciando demonstração em alta definição!');
-        startSampleStream('Minecraft Survival Gameplay RTX', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+        showToast('Iniciando demonstração de transmissão em alta definição!');
+        startSampleStream('Gameplay RTX 1080p 60fps', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
         return;
       }
 
@@ -130,24 +143,23 @@ export function App() {
         };
       }
 
+      const activeName = currentUserName || 'Você';
       setStreamState({
         type: 'screen',
         stream: mediaStream,
-        title: 'Tela de Surtado',
+        title: `Tela de ${activeName}`,
         quality: streamQuality,
         isSharing: true,
         isPaused: false,
       });
 
-      // Add system message to chat
-      addSystemMessage('Surtado começou a compartilhar a tela em alta definição.');
-      showToast('Compartilhamento de tela iniciado com sucesso!');
+      addSystemMessage(`${activeName} começou a compartilhar a tela.`);
+      showToast('Compartilhamento de tela ativo!');
     } catch (err: unknown) {
       const error = err as Error;
       if (error.name !== 'NotAllowedError') {
-        console.warn('Screen share failed, falling back to simulated stream:', err);
-        showToast('Não foi possível obter a tela nativa. Ativando transmissão de demonstração!');
-        startSampleStream('Minecraft Survival Gameplay RTX', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+        showToast('Ativando transmissão alternativa em alta definição!');
+        startSampleStream('Gameplay RTX 1080p 60fps', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
       } else {
         showToast('Compartilhamento cancelado.');
       }
@@ -170,22 +182,21 @@ export function App() {
       setCameraStream(stream);
       setIsCameraActive(true);
 
-      // If no screen is being shared, set camera as primary stream
+      const activeName = currentUserName || 'Você';
       if (!streamState.isSharing) {
         setStreamState({
           type: 'camera',
           stream: stream,
-          title: 'Câmera de Surtado',
+          title: `Câmera de ${activeName}`,
           quality: '720p 30fps',
           isSharing: true,
           isPaused: false,
         });
       }
 
-      addSystemMessage('Surtado ligou a câmera.');
+      addSystemMessage(`${activeName} ligou a câmera.`);
       showToast('Câmera ativada com sucesso!');
-    } catch (err) {
-      console.warn('Camera share error:', err);
+    } catch {
       showToast('Permissão de câmera negada ou não disponível.');
     }
   };
@@ -200,7 +211,7 @@ export function App() {
       if (streamState.type === 'camera') {
         handleStopSharing();
       }
-      addSystemMessage('Surtado desligou a câmera.');
+      addSystemMessage(`${currentUserName || 'Você'} desligou a câmera.`);
     } else {
       handleStartCameraShare();
     }
@@ -268,7 +279,7 @@ export function App() {
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
-        a.download = `golive-gravacao-${roomName}-${Date.now()}.webm`;
+        a.download = `livedc-gravacao-${roomName}-${Date.now()}.webm`;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
@@ -284,9 +295,8 @@ export function App() {
         setRecordingTime((prev) => prev + 1);
       }, 1000);
 
-      showToast('Gravação iniciada! Clique no botão de gravação para finalizar e baixar o arquivo.');
-    } catch (err) {
-      console.error('Failed to start recording:', err);
+      showToast('Gravação iniciada com sucesso!');
+    } catch {
       showToast('Não foi possível gravar esta fonte de vídeo.');
     }
   };
@@ -318,9 +328,10 @@ export function App() {
 
   // Chat message send
   const handleSendMessage = (text: string, gifUrl?: string) => {
+    const activeName = currentUserName || 'Você';
     const newMsg: ChatMessage = {
       id: Date.now().toString(),
-      sender: 'Surtado',
+      sender: activeName,
       avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
       text,
       mediaUrl: gifUrl,
@@ -330,37 +341,10 @@ export function App() {
 
     setMessages((prev) => [...prev, newMsg]);
     setUserPoints((prev) => prev + 5);
-
-    // Simulated interactive reply from Zuck.js
-    setTimeout(() => {
-      const replies = [
-        'A qualidade da sua transmissão tá incrível!',
-        'Boa jogada!! 🔥',
-        'O áudio tá 100% limpo aqui no fone.',
-        'Top demaiss, salve pro chat!',
-        'GG!! Manda bala',
-      ];
-      const randomReply = replies[Math.floor(Math.random() * replies.length)];
-
-      const guestMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: 'Zuck.js',
-        avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop&crop=face',
-        text: randomReply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        color: 'text-sky-400',
-      };
-      setMessages((m) => [...m, guestMsg]);
-    }, 1800);
-  };
-
-  const handleClaimPoints = (amount: number) => {
-    setUserPoints((prev) => prev + amount);
-    showToast(`Parabéns! Você resgatou +${amount} pontos.`);
   };
 
   const handleAddParticipant = () => {
-    const names = ['Pedro_Gamer', 'Larissa_FPS', 'CyberVitor', 'Ana_Play'];
+    const names = ['Pedro_Gamer', 'Larissa_FPS', 'CyberVitor', 'Ana_Play', 'Lucas_Live'];
     const chosenName = names[Math.floor(Math.random() * names.length)];
     const newP: Participant = {
       id: Date.now().toString(),
@@ -377,6 +361,12 @@ export function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0d0f12] text-gray-200 select-none">
+      {/* Name Input modal when joining */}
+      <NamePromptModal
+        isOpen={isNameModalOpen}
+        onJoin={handleUserJoin}
+      />
+
       {/* Top Banner Notice */}
       <TopNoticeBanner />
 
@@ -411,11 +401,10 @@ export function App() {
 
       {/* Center 3-column layout */}
       <div className="flex-1 flex overflow-hidden min-h-0 relative">
-        {/* Left Sidebar: Participants & Minezinho ad */}
+        {/* Left Sidebar: Participants list (sponsored box removed!) */}
         <LeftSidebar
           participants={participants}
           onAddParticipant={handleAddParticipant}
-          onClaimPoints={handleClaimPoints}
           userPoints={userPoints}
         />
 
@@ -433,7 +422,7 @@ export function App() {
           recordingTime={recordingTime}
         />
 
-        {/* Right Sidebar: Chat, Record Notice & Streamer Mode */}
+        {/* Right Sidebar: Chat & Profile with custom name (notice removed!) */}
         <RightSidebar
           messages={messages}
           onSendMessage={handleSendMessage}
@@ -447,8 +436,7 @@ export function App() {
                 : 'Modo Streamer ATIVADO! Informações confidenciais ocultadas.'
             );
           }}
-          onStartRecording={handleStartRecording}
-          isRecording={isRecording}
+          currentUserName={currentUserName || 'Você'}
         />
       </div>
 
@@ -525,4 +513,3 @@ export function App() {
 }
 
 export default App;
-

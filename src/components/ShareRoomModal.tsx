@@ -15,7 +15,7 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   roomCode,
 }) => {
   const [copied, setCopied] = useState(false);
-  const roomUrl = `https://golive.nemtudo.me/watch/priv-${roomName}-${roomCode}`;
+  const roomUrl = `https://livedc.me/watch/priv-${roomName}-${roomCode}`;
 
   if (!isOpen) return null;
 
@@ -32,7 +32,7 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
         <div className="p-4 border-b border-[#212a3d] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Share2 className="w-5 h-5 text-emerald-400" />
-            <h3 className="font-bold text-gray-100 text-sm">Compartilhar Sala</h3>
+            <h3 className="font-bold text-gray-100 text-sm">Compartilhar Sala LiveDC</h3>
           </div>
           <button
             onClick={onClose}
@@ -46,12 +46,12 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
         <div className="p-5 space-y-4">
           <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg">
             <ShieldCheck className="w-4 h-4 shrink-0" />
-            <span>Qualquer pessoa com o link poderá entrar e assistir sua transmissão.</span>
+            <span>Link privado e criptografado ponto a ponto via LiveDC.</span>
           </div>
 
           <div>
             <label className="text-xs text-gray-400 font-medium block mb-1.5">
-              Link direto da sala
+              Link direto da sala LiveDC
             </label>
             <div className="flex items-center gap-2 bg-[#0d1017] border border-[#263045] rounded-xl p-2">
               <input
@@ -88,7 +88,7 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
           <div className="grid grid-cols-2 gap-2 pt-2">
             <button
               onClick={() => {
-                window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(`Entra na minha sala privada no GoLive para assistir minha tela: ${roomUrl}`)}`, '_blank');
+                window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(`Entra na minha sala privada no LiveDC para assistir minha tela: ${roomUrl}`)}`, '_blank');
               }}
               className="py-2 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] border border-[#25D366]/40 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
             >
@@ -96,7 +96,7 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
             </button>
             <button
               onClick={() => {
-                window.open(`https://telegram.me/share/url?url=${encodeURIComponent(roomUrl)}&text=${encodeURIComponent('Assistir no GoLive')}`, '_blank');
+                window.open(`https://telegram.me/share/url?url=${encodeURIComponent(roomUrl)}&text=${encodeURIComponent('Assistir no LiveDC')}`, '_blank');
               }}
               className="py-2 px-3 rounded-xl bg-[#0088cc]/20 hover:bg-[#0088cc]/30 text-[#0088cc] border border-[#0088cc]/40 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
             >

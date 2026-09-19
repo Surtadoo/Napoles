@@ -55,7 +55,7 @@ export const MusicPlayerModal: React.FC<MusicPlayerModalProps> = ({
         <div className="p-4 border-b border-[#212a3d] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Music className="w-5 h-5 text-teal-400" />
-            <h3 className="font-bold text-gray-100 text-sm">Rádio GoLive (BETA)</h3>
+            <h3 className="font-bold text-gray-100 text-sm">Rádio LiveDC (BETA)</h3>
           </div>
           <button
             onClick={onClose}

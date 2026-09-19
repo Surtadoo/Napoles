@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   MapPin, 
-  X, 
   Bell, 
   Plus, 
   Send, 
   Smile, 
-  Video, 
   Radio, 
   Coins
 } from 'lucide-react';
@@ -18,8 +16,7 @@ interface RightSidebarProps {
   userPoints: number;
   streamerMode: boolean;
   onToggleStreamerMode: () => void;
-  onStartRecording: () => void;
-  isRecording: boolean;
+  currentUserName: string;
 }
 
 const SAMPLE_GIFS = [
@@ -37,11 +34,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   userPoints,
   streamerMode,
   onToggleStreamerMode,
-  onStartRecording,
-  isRecording,
+  currentUserName,
 }) => {
   const [inputText, setInputText] = useState('');
-  const [showRecordingTooltip, setShowRecordingTooltip] = useState(true);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -72,50 +67,15 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
     <aside className="w-80 bg-[#12151b] border-l border-[#1f2533] flex flex-col justify-between shrink-0 h-full select-none z-10">
       {/* Top Header section */}
       <div className="border-b border-[#1f2533] relative">
-        {/* Map button & recording tooltip */}
         <div className="p-2.5 pb-1.5 flex items-center justify-between">
           <button 
             onClick={() => alert('Localização da sala privada: Brasil (São Paulo, Edge SP-1) - Ping: 12ms')}
             className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-[#1a2130] transition-colors"
           >
-            <MapPin className="w-3.5 h-3.5 text-blue-400" />
+            <MapPin className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-[11px] font-medium">Definir no mapa</span>
           </button>
         </div>
-
-        {/* Floating Tooltip Notice from screenshot */}
-        {showRecordingTooltip && (
-          <div className="mx-2.5 mb-2 p-2.5 rounded-lg bg-[#1e40af] text-white text-xs shadow-xl border border-blue-400/40 relative animate-in fade-in slide-in-from-top-2 duration-200">
-            <button
-              onClick={() => setShowRecordingTooltip(false)}
-              className="absolute top-1.5 right-1.5 text-blue-200 hover:text-white p-0.5 rounded"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-            <div className="pr-4 leading-relaxed">
-              <strong className="text-blue-100 font-bold block mb-0.5">Novo:</strong>
-              ative a Gravação aqui para gravar qualquer tela ou câmera e baixar o vídeo.
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <button
-                onClick={() => {
-                  onStartRecording();
-                  setShowRecordingTooltip(false);
-                }}
-                className="px-2 py-1 rounded bg-white text-blue-900 font-bold text-[11px] hover:bg-blue-50 transition-colors flex items-center gap-1 shadow-sm"
-              >
-                <Video className="w-3 h-3 text-red-600" />
-                <span>{isRecording ? 'Parar Gravação' : 'Testar Gravação'}</span>
-              </button>
-              <button
-                onClick={() => setShowRecordingTooltip(false)}
-                className="text-[11px] text-blue-200 hover:text-white underline"
-              >
-                Entendi
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Tab Title: Chat */}
         <div className="px-4 py-2 flex items-center justify-between bg-[#151922]">
@@ -225,20 +185,18 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
       {/* Chat Input Area */}
       <div className="p-2.5 bg-[#141820] border-t border-[#1f2636]">
         <form onSubmit={handleSend} className="flex items-center gap-1.5 bg-[#1a202c] rounded-xl px-2.5 py-1 border border-[#2b354a] focus-within:border-emerald-500/70 transition-colors">
-          {/* Plus / Upload button */}
           <button
             type="button"
             onClick={() => {
               const dummyImg = 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=400&q=80';
               onSendMessage('Compartilhou uma captura 🎮', dummyImg);
             }}
-            title="Enviar imagem/mídia"
+            title="Enviar imagem"
             className="text-gray-400 hover:text-white p-1 rounded-md transition-colors"
           >
             <Plus className="w-4 h-4" />
           </button>
 
-          {/* Input text */}
           <input
             type="text"
             value={inputText}
@@ -247,7 +205,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             className="flex-1 bg-transparent text-xs text-gray-100 placeholder-gray-500 outline-none py-1.5 min-w-0"
           />
 
-          {/* GIF button */}
           <button
             type="button"
             onClick={() => {
@@ -261,7 +218,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             GIF
           </button>
 
-          {/* Emoji button */}
           <button
             type="button"
             onClick={() => {
@@ -275,7 +231,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             <Smile className="w-4 h-4" />
           </button>
 
-          {/* Send button */}
           <button
             type="submit"
             disabled={!inputText.trim()}
@@ -287,13 +242,13 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
       </div>
 
       {/* User Footer Profile & Streamer Mode */}
-      <div className="p-3 bg-[#11141a] border-t border-[#1f2533] space-y-2">
+      <div className="p-3 bg-[#11141a] border-t border-[#1f2633] space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="relative">
               <img
                 src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face"
-                alt="Surtado"
+                alt={currentUserName}
                 className="w-9 h-9 rounded-full object-cover ring-2 ring-emerald-500"
               />
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-[#11141a]"></span>
@@ -301,14 +256,13 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
             <div>
               <div className="text-xs font-bold text-gray-100 flex items-center gap-1">
-                <span>Surtado</span>
-                <span className="text-blue-400 text-[10px]">✔</span>
+                <span>{currentUserName}</span>
+                <span className="text-emerald-400 text-[10px]">✔</span>
               </div>
-              <span className="text-[11px] text-gray-400">@surtadoo</span>
+              <span className="text-[11px] text-gray-400">@{currentUserName.toLowerCase().replace(/\s+/g, '')}</span>
             </div>
           </div>
 
-          {/* User Points */}
           <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#181f2c] border border-[#26334a] text-xs">
             <Coins className="w-3.5 h-3.5 text-amber-400" />
             <span className="text-gray-300 text-[11px]">Pontos</span>

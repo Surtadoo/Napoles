@@ -23,7 +23,7 @@ export const ProModal: React.FC<ProModalProps> = ({ isOpen, onClose }) => {
           <div className="w-12 h-12 mx-auto rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center mb-2 shadow-inner">
             <Zap className="w-6 h-6 text-yellow-300 fill-current" />
           </div>
-          <h3 className="text-xl font-bold">GoLive Pro</h3>
+          <h3 className="text-xl font-bold">LiveDC Pro</h3>
           <p className="text-xs text-blue-100 mt-1">Transmissões sem limites e máxima performance</p>
         </div>
 
@@ -32,9 +32,9 @@ export const ProModal: React.FC<ProModalProps> = ({ isOpen, onClose }) => {
           {[
             'Qualidade de transmissão Full HD 1080p a 60 FPS',
             'Gravação de tela e câmera ilimitada com download direto',
-            'Badge de verificação Pro dourada no seu perfil',
+            'Badge de verificação Pro dourada no seu perfil LiveDC',
             'Salas com até 50 pessoas sem latência',
-            'Assistir vídeos e streams sem anúncios',
+            'Transmissão ultrarrápida com servidores dedicados',
           ].map((item, idx) => (
             <div key={idx} className="flex items-center gap-2.5 text-xs text-gray-200">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -49,7 +49,7 @@ export const ProModal: React.FC<ProModalProps> = ({ isOpen, onClose }) => {
             </div>
             <button
               onClick={() => {
-                alert('Parabéns! Sua assinatura GoLive Pro de demonstração foi ativada com sucesso!');
+                alert('Parabéns! Sua assinatura LiveDC Pro de demonstração foi ativada com sucesso!');
                 onClose();
               }}
               className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-blue-500/20 hover:scale-105 transition-all flex items-center gap-1.5"
