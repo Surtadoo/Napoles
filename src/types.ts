@@ -34,3 +34,20 @@ export interface StreamState {
   isSharing: boolean;
   isPaused: boolean;
 }
+
+export type SharedMediaPlatform = 'youtube' | 'twitch' | 'kick' | 'file';
+export type SharedMediaController = 'leader' | 'any';
+
+export interface SharedMediaPayload {
+  id: string;
+  platform: SharedMediaPlatform;
+  rawUrl: string;
+  embedUrl: string;
+  title: string;
+  controller: SharedMediaController;
+  leaderId: string;
+  leaderName: string;
+  createdAt: number;
+  fileName?: string;
+  localOnly?: boolean;
+}

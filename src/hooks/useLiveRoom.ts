@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { joinRoom } from 'trystero';
-import type { ChatMessage } from '../types';
+import { joinRoom, selfId } from 'trystero';
+import type { ChatMessage, SharedMediaPayload } from '../types';
 
 export interface RemotePeerProfile {
   peerId: string;
@@ -31,6 +31,8 @@ interface UseLiveRoomOptions {
   onRemoteChat: (msg: ChatMessage) => void;
   onPeerJoinNotice: (name: string) => void;
   onPeerLeaveNotice: (name: string) => void;
+  onKicked?: () => void;
+  onMediaNotice?: (text: string) => void;
 }
 
 const APP_ID = 'livedc-call-v2-stable';
@@ -66,26 +68,32 @@ export function useLiveRoom({
   onRemoteChat,
   onPeerJoinNotice,
   onPeerLeaveNotice,
+  onKicked,
+  onMediaNotice,
 }: UseLiveRoomOptions) {
   const [remotePeers, setRemotePeers] = useState<Record<string, RemotePeerProfile>>({});
   const [remoteStreams, setRemoteStreams] = useState<RemoteStreamInfo[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connecting' | 'connected'>('idle');
+  const [sharedMedia, setSharedMedia] = useState<SharedMediaPayload | null>(null);
 
   const roomRef = useRef<any>(null);
-  const actionsRef = useRef<{ profile?: any; chat?: any } | null>(null);
+  const actionsRef = useRef<{ profile?: any; chat?: any; kick?: any; media?: any } | null>(null);
   const localStreamsRef = useRef<Map<string, { stream: MediaStream; kind: string }>>(new Map());
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
-  const cbRef = useRef({ onRemoteChat, onPeerJoinNotice, onPeerLeaveNotice });
-  cbRef.current = { onRemoteChat, onPeerJoinNotice, onPeerLeaveNotice };
+  const cbRef = useRef({ onRemoteChat, onPeerJoinNotice, onPeerLeaveNotice, onKicked, onMediaNotice });
+  cbRef.current = { onRemoteChat, onPeerJoinNotice, onPeerLeaveNotice, onKicked, onMediaNotice };
 
   const profileRef = useRef({ userName, userAvatar, isMuted, isSharing, isCameraOn });
   profileRef.current = { userName, userAvatar, isMuted, isSharing, isCameraOn };
 
   const remotePeersRef = useRef<Record<string, RemotePeerProfile>>({});
   remotePeersRef.current = remotePeers;
+
+  const sharedMediaRef = useRef<SharedMediaPayload | null>(null);
+  sharedMediaRef.current = sharedMedia;
 
   const myProfilePayload = useCallback(() => {
     const p = profileRef.current;
@@ -114,6 +122,7 @@ export function useLiveRoom({
     audioElsRef.current.clear();
     setRemotePeers({});
     setRemoteStreams([]);
+    setSharedMedia(null);
     setConnectionStatus('idle');
   }, []);
 
@@ -125,6 +134,7 @@ export function useLiveRoom({
     setConnectionStatus('connecting');
     setRemotePeers({});
     setRemoteStreams([]);
+    setSharedMedia(null);
 
     let room: any = null;
     try {
@@ -146,7 +156,42 @@ export function useLiveRoom({
 
     const profileAction = room.makeAction('livedc-profile-v3');
     const chatAction = room.makeAction('livedc-chat-v3');
-    actionsRef.current = { profile: profileAction, chat: chatAction };
+    const kickAction = room.makeAction('livedc-kick-v1');
+    const mediaAction = room.makeAction('livedc-media-v2');
+    actionsRef.current = { profile: profileAction, chat: chatAction, kick: kickAction, media: mediaAction };
+
+    // recebo ordem de expulsão? só obedeço se o alvo for o meu selfId
+    try {
+      (kickAction as any).onMessage = (data: any) => {
+        if (cancelled || !data) return;
+        try {
+          if (String(data.target || '') === String(selfId)) {
+            cbRef.current.onKicked?.();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    // vídeo BETA compartilhado (YouTube/Twitch/Kick/arquivo)
+    try {
+      (mediaAction as any).onMessage = (data: any, meta: any) => {
+        const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
+        if (!data || cancelled) return;
+        if (data.kind === 'set' && data.media) {
+          const m = data.media as SharedMediaPayload;
+          const cur = sharedMediaRef.current;
+          // se o vídeo atual é "só o líder controla" e quem mandou não é o líder, ignora
+          if (cur && cur.controller === 'leader' && cur.leaderId !== peerId) return;
+          setSharedMedia(m);
+          cbRef.current.onMediaNotice?.(`${m.leaderName} compartilhou: ${m.title}`);
+        } else if (data.kind === 'clear') {
+          const cur = sharedMediaRef.current;
+          if (cur && cur.controller === 'leader' && cur.leaderId !== peerId) return;
+          setSharedMedia(null);
+          cbRef.current.onMediaNotice?.(`${String(data.byName || 'Alguém')} encerrou o vídeo.`);
+        }
+      };
+    } catch {}
 
     const broadcastProfile = (target?: string) => {
       if (cancelled) return;
@@ -157,6 +202,18 @@ export function useLiveRoom({
         try {
           if (target) (profileAction as any).send(myProfilePayload(), target);
           else (profileAction as any).send(myProfilePayload());
+        } catch {}
+      }
+    };
+
+    const sendMediaTo = (target: string) => {
+      const cur = sharedMediaRef.current;
+      if (!cur) return;
+      try {
+        mediaAction.send({ kind: 'set', media: cur }, { target } as any);
+      } catch {
+        try {
+          (mediaAction as any).send({ kind: 'set', media: cur }, target);
         } catch {}
       }
     };
@@ -181,7 +238,6 @@ export function useLiveRoom({
         setRemoteStreams((prev) =>
           prev.map((s) => (s.peerId === peerId ? { ...s, ownerName: name } : s))
         );
-        // avisa entrada quando é perfil novo
         setRemotePeers((prev) => {
           return prev;
         });
@@ -214,11 +270,12 @@ export function useLiveRoom({
     try {
       (room as any).onPeerJoin = (peerId: string) => {
         if (cancelled) return;
-        // manda perfil + streams para quem chegou (com retries)
+        // manda perfil + streams + vídeo BETA para quem chegou (com retries)
         [300, 1200, 2500].forEach((ms) => {
           setTimeout(() => {
             if (cancelled) return;
             broadcastProfile(peerId);
+            sendMediaTo(peerId);
             localStreamsRef.current.forEach(({ stream, kind }) => {
               try {
                 room.addStream(stream, {
@@ -237,10 +294,8 @@ export function useLiveRoom({
           const label = known?.name && known.name !== 'Convidado' ? known.name : 'Alguém';
           if (!announced.has(peerId)) {
             announced.add(peerId);
-            // só anuncia se já temos nome, senão o perfil que chegar vai atualizar a lista
             if (known && known.name !== 'Convidado') cbRef.current.onPeerJoinNotice(known.name);
             else {
-              // agenda verificação
               setTimeout(() => {
                 const later = remotePeersRef.current[peerId];
                 if (later && !announced.has(peerId + '-2')) {
@@ -407,7 +462,6 @@ export function useLiveRoom({
         const r = room.addStream(stream, {
           metadata: { kind, owner: profileRef.current.userName },
         });
-        // addStream retorna array de promises
         if (Array.isArray(r)) r.forEach((p: any) => (p as Promise<void>)?.catch?.(() => {}));
       } catch {}
     },
@@ -426,6 +480,55 @@ export function useLiveRoom({
     } catch {}
   }, []);
 
+  // expulsa um peer da call (só o dono usa). Envia ordem + remove localmente.
+  const kickPeer = useCallback(
+    (targetPeerId: string, targetName: string) => {
+      try {
+        actionsRef.current?.kick?.send({
+          target: targetPeerId,
+          by: profileRef.current.userName,
+          ts: Date.now(),
+        });
+      } catch {}
+      setRemotePeers((prev) => {
+        const next = { ...prev };
+        delete next[targetPeerId];
+        return next;
+      });
+      setRemoteStreams((prev) => prev.filter((s) => s.peerId !== targetPeerId));
+      const audioKeys = Array.from(audioElsRef.current.keys()).filter((k) =>
+        k.startsWith(targetPeerId)
+      );
+      audioKeys.forEach((k) => {
+        const a = audioElsRef.current.get(k);
+        if (a) {
+          try {
+            a.pause();
+          } catch {}
+          audioElsRef.current.delete(k);
+        }
+      });
+      return targetName;
+    },
+    []
+  );
+
+  /** Compartilha um vídeo BETA com toda a sala (YouTube/Twitch/Kick/arquivo). */
+  const broadcastMedia = useCallback((media: SharedMediaPayload) => {
+    setSharedMedia(media);
+    try {
+      actionsRef.current?.media?.send({ kind: 'set', media });
+    } catch {}
+  }, []);
+
+  /** Encerra o vídeo BETA para toda a sala. */
+  const clearMedia = useCallback((byName: string) => {
+    setSharedMedia(null);
+    try {
+      actionsRef.current?.media?.send({ kind: 'clear', byName });
+    } catch {}
+  }, []);
+
   return {
     remotePeers,
     remoteStreams,
@@ -436,5 +539,10 @@ export function useLiveRoom({
     publishStream,
     unpublishStream,
     cleanupRoom,
+    kickPeer,
+    myPeerId: selfId as string,
+    sharedMedia,
+    broadcastMedia,
+    clearMedia,
   };
 }

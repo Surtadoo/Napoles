@@ -1,18 +1,18 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Video, Users, MessageCircle } from 'lucide-react';
-import { TopNoticeBanner } from './components/TopNoticeBanner';
 import { HeaderBar } from './components/HeaderBar';
 import { LeftSidebar } from './components/LeftSidebar';
 import { StreamView } from './components/StreamView';
 import { RightSidebar } from './components/RightSidebar';
 import { ShareRoomModal } from './components/ShareRoomModal';
 import { SettingsModal } from './components/SettingsModal';
-import { VideoSourceModal } from './components/VideoSourceModal';
-import { YouTubeModal } from './components/YouTubeModal';
+import { BetaMediaModal, BetaMediaInput } from './components/BetaMediaModal';
+import { MobileScreenShareModal } from './components/MobileScreenShareModal';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
-import { Participant, ChatMessage, StreamState } from './types';
+import { Participant, ChatMessage, StreamState, SharedMediaPayload } from './types';
+import { MediaPlatform, platformLabel } from './utils/media';
 import { initAntiInspectionAndProtection } from './utils/security';
 import { useLiveRoom } from './hooks/useLiveRoom';
 import {
@@ -82,8 +82,10 @@ export function App() {
 
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isVideoSourceModalOpen, setIsVideoSourceModalOpen] = useState(false);
-  const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
+  const [isBetaOpen, setIsBetaOpen] = useState(false);
+  const [betaInitialPlatform, setBetaInitialPlatform] = useState<MediaPlatform>('youtube');
+  const [isMobileShareOpen, setIsMobileShareOpen] = useState(false);
+  const [localBetaFileUrl, setLocalBetaFileUrl] = useState<string | null>(null);
   const [isMusicModalOpen, setIsMusicModalOpen] = useState(false);
   const [isProModalOpen, setIsProModalOpen] = useState(false);
 
@@ -128,6 +130,22 @@ export function App() {
     [addSystemMessage]
   );
 
+  const [wasKicked, setWasKicked] = useState(false);
+
+  const handleKicked = useCallback(() => {
+    setWasKicked(true);
+    try {
+      streamState.stream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      cameraStream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      micStreamRef.current?.getAudioTracks().forEach((t) => t.stop());
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamState.stream, cameraStream]);
+
   const profileSharing =
     streamState.isSharing && (streamState.type === 'screen' || streamState.type === 'camera');
 
@@ -135,14 +153,114 @@ export function App() {
     roomCode,
     userName: currentUserName,
     userAvatar,
-    enabled: !!currentUserName,
+    enabled: !!currentUserName && !wasKicked,
     isMuted,
     isSharing: profileSharing,
     isCameraOn: isCameraActive,
     onRemoteChat: handleRemoteChat,
     onPeerJoinNotice: handlePeerJoinNotice,
     onPeerLeaveNotice: handlePeerLeaveNotice,
+    onKicked: handleKicked,
+    onMediaNotice: (text) => {
+      addSystemMessage(text);
+    },
   });
+
+  const { sharedMedia, myPeerId } = liveRoom;
+
+  const isMobileDevice = useMemo(
+    () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ''),
+    []
+  );
+
+  // quem pode mexer no BETA agora?
+  const canControlBeta = useMemo(() => {
+    if (!sharedMedia) return true;
+    if (sharedMedia.controller === 'any') return true;
+    return sharedMedia.leaderId === myPeerId;
+  }, [sharedMedia, myPeerId]);
+
+  const openBeta = useCallback(
+    (initial: MediaPlatform = 'youtube') => {
+      if (!currentUserName) {
+        showToast('Entre na call primeiro.');
+        return;
+      }
+      if (sharedMedia && sharedMedia.controller === 'leader' && sharedMedia.leaderId !== myPeerId) {
+        showToast(`Só ${sharedMedia.leaderName} pode controlar o BETA agora.`);
+        return;
+      }
+      setBetaInitialPlatform(initial);
+      setIsBetaOpen(true);
+    },
+    [currentUserName, sharedMedia, myPeerId, showToast]
+  );
+
+  const handleAddBeta = useCallback(
+    (input: BetaMediaInput) => {
+      if (localBetaFileUrl) {
+        try {
+          URL.revokeObjectURL(localBetaFileUrl);
+        } catch {}
+        setLocalBetaFileUrl(null);
+      }
+      if (input.objectUrl) setLocalBetaFileUrl(input.objectUrl);
+      const media: SharedMediaPayload = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        platform: input.platform,
+        rawUrl: input.rawUrl,
+        embedUrl: input.embedUrl,
+        title: input.title,
+        controller: input.controller,
+        leaderId: myPeerId,
+        leaderName: currentUserName || 'Você',
+        createdAt: Date.now(),
+        fileName: input.fileName,
+        localOnly: input.localOnly,
+      };
+      liveRoom.broadcastMedia(media);
+      addSystemMessage(
+        `${currentUserName} adicionou ${input.title} (${platformLabel(input.platform)}) — todos veem igual à tela.` +
+          (input.controller === 'leader'
+            ? ' Só ele controla o BETA.'
+            : ' Qualquer um pode controlar o BETA.')
+      );
+      showToast(
+        input.controller === 'leader'
+          ? 'Vídeo no ar! Só você controla o BETA.'
+          : 'Vídeo no ar! Todos podem controlar o BETA.'
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [localBetaFileUrl, myPeerId, currentUserName, addSystemMessage, showToast]
+  );
+
+  const handleCloseSharedVideo = useCallback(() => {
+    if (sharedMedia && sharedMedia.controller === 'leader' && sharedMedia.leaderId !== myPeerId) {
+      showToast(`Só ${sharedMedia.leaderName} pode encerrar este vídeo.`);
+      return;
+    }
+    if (localBetaFileUrl) {
+      try {
+        URL.revokeObjectURL(localBetaFileUrl);
+      } catch {}
+      setLocalBetaFileUrl(null);
+    }
+    liveRoom.clearMedia(currentUserName || 'Você');
+    addSystemMessage('Vídeo BETA encerrado.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedMedia, myPeerId, localBetaFileUrl, currentUserName, addSystemMessage, showToast]);
+
+  // expulsa pessoa da call (dono da sala)
+  const handleKickParticipant = useCallback(
+    (peerId: string, name: string) => {
+      liveRoom.kickPeer(peerId, name);
+      addSystemMessage(`${name} foi desconectado da call.`);
+      showToast(`${name} foi removido da call.`);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [addSystemMessage, showToast, liveRoom.kickPeer]
+  );
 
   const { remotePeersList, remoteStreams, connectionStatus } = liveRoom;
 
@@ -186,6 +304,15 @@ export function App() {
     try {
       cameraStream?.getTracks().forEach((t) => t.stop());
     } catch {}
+    try {
+      liveRoom.clearMedia(currentUserName || 'Você');
+    } catch {}
+    if (localBetaFileUrl) {
+      try {
+        URL.revokeObjectURL(localBetaFileUrl);
+      } catch {}
+      setLocalBetaFileUrl(null);
+    }
     setCameraStream(null);
     setIsCameraActive(false);
     setStreamState({
@@ -272,18 +399,46 @@ export function App() {
   };
 
   const handleStartScreenShare = async () => {
+    // no celular abre o menu com as opções que funcionam (tela/câmera traseira/arquivo)
+    if (isMobileDevice && !streamState.isSharing) {
+      setIsMobileShareOpen(true);
+      return;
+    }
+    await attemptNativeScreenShare();
+  };
+
+  const attemptNativeScreenShare = async () => {
+    setIsMobileShareOpen(false);
     try {
       const nav: any = navigator;
       const getDisplay =
         nav?.mediaDevices?.getDisplayMedia?.bind(nav.mediaDevices) ||
         (nav as any)?.getDisplayMedia?.bind(nav);
       if (!getDisplay) {
-        // iPhone/Safari não tem getDisplayMedia — orienta a usar câmera
-        showToast('Este celular não permite tela. Use a Câmera para transmitir seu vídeo.');
+        // sem API de tela: oferece câmera traseira no celular
+        if (isMobileDevice) {
+          setIsMobileShareOpen(true);
+          return;
+        }
+        showToast('Este navegador não permite compartilhar a tela. Use a Câmera.');
         return;
       }
+      const want4k = /4k|2160/i.test(streamQuality);
+      const want1080 = /1080/i.test(streamQuality);
       const mediaStream: MediaStream = await nav.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 30 } },
+        video: want4k
+          ? {
+              width: { ideal: 3840, max: 3840 },
+              height: { ideal: 2160, max: 2160 },
+              frameRate: { ideal: 60, max: 60 },
+            }
+          : want1080
+            ? {
+                width: { ideal: 1920, max: 1920 },
+                height: { ideal: 1080, max: 1080 },
+                frameRate: { ideal: 60, max: 60 },
+              }
+            : { frameRate: { ideal: 30, max: 30 } },
         audio: true,
       });
       const videoTrack = mediaStream.getVideoTracks()[0];
@@ -298,8 +453,15 @@ export function App() {
         isPaused: false,
       });
       liveRoom.publishStream(mediaStream, 'screen', 'screen-local');
-      addSystemMessage(`${activeName} compartilha a tela — todos veem ao vivo.`);
-      showToast('Tela ao vivo! Todos na sala veem.');
+      const track = mediaStream.getVideoTracks()[0];
+      const set = track?.getSettings?.();
+      const realRes = set?.width && set?.height ? ` (${set.width}×${set.height})` : '';
+      addSystemMessage(`${activeName} compartilha a tela${realRes} — todos veem ao vivo.`);
+      showToast(
+        want4k
+          ? `Tela em 4K ao vivo${realRes}! Todos na sala veem.`
+          : 'Tela ao vivo! Todos na sala veem.'
+      );
     } catch (err: unknown) {
       const error = err as Error;
       if (error?.name === 'NotAllowedError') showToast('Compartilhamento cancelado.');
@@ -354,6 +516,50 @@ export function App() {
     } else {
       handleStartCameraShare();
     }
+  };
+
+  /** Câmera traseira do celular valendo como "tela" — todos veem grande. */
+  const handleRearCameraShare = async () => {
+    setIsMobileShareOpen(false);
+    if (streamState.isSharing) {
+      showToast('Pare a transmissão atual antes de trocar.');
+      return;
+    }
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        showToast('Câmera não suportada neste aparelho.');
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: true,
+      });
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) videoTrack.onended = () => handleStopSharing();
+      const activeName = currentUserName || 'Você';
+      setStreamState({
+        type: 'screen',
+        stream,
+        title: `Câmera traseira de ${activeName}`,
+        quality: streamQuality,
+        isSharing: true,
+        isPaused: false,
+      });
+      liveRoom.publishStream(stream, 'screen', 'screen-local');
+      addSystemMessage(`${activeName} compartilha a câmera traseira — todos veem ao vivo.`);
+      showToast('Câmera traseira ao vivo! Todos veem.');
+    } catch {
+      showToast('Permita a câmera para transmitir a traseira.');
+    }
+  };
+
+  const handleMobileOpenFile = () => {
+    setIsMobileShareOpen(false);
+    openBeta('file');
   };
 
   const handleStopSharing = () => {
@@ -467,7 +673,6 @@ export function App() {
         onJoin={handleUserJoin}
         invitedRoomCode={initialInviteCode}
       />
-      <TopNoticeBanner />
       <HeaderBar
         roomName={streamerMode ? 'Sala_Oculta' : roomName}
         roomCode={streamerMode ? '******' : roomCode}
@@ -481,7 +686,7 @@ export function App() {
         isCameraActive={isCameraActive}
         onToggleCamera={handleToggleCamera}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
-        onOpenYouTube={() => setIsYouTubeModalOpen(true)}
+        onOpenYouTube={() => openBeta('youtube')}
         onOpenMusic={() => setIsMusicModalOpen(true)}
         onDisconnect={() => {
           if (confirm('Sair da call?')) {
@@ -508,6 +713,8 @@ export function App() {
             userPoints={userPoints}
             connectionStatus={connectionStatus}
             shareUrl={shareUrl}
+            isOwner={!initialInviteCode && !!currentUserName}
+            onKickParticipant={handleKickParticipant}
           />
         </div>
 
@@ -522,13 +729,17 @@ export function App() {
             remoteStreams={remoteStreams}
             onStartScreenShare={handleStartScreenShare}
             onStartCameraShare={handleStartCameraShare}
-            onOpenVideoSourceModal={() => setIsVideoSourceModalOpen(true)}
+            onOpenVideoSourceModal={() => openBeta('youtube')}
             onStopSharing={handleStopSharing}
             isCameraActive={isCameraActive}
             cameraStream={cameraStream}
             onRecordScreen={handleStartRecording}
             isRecording={isRecording}
             recordingTime={recordingTime}
+            sharedVideo={sharedMedia}
+            sharedFileUrl={localBetaFileUrl}
+            canControlSharedVideo={canControlBeta}
+            onCloseSharedVideo={handleCloseSharedVideo}
           />
         </div>
 
@@ -584,10 +795,32 @@ export function App() {
         </button>
       </nav>
 
-      {toastMessage && (
+      {toastMessage && !wasKicked && (
         <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 z-[90] bg-[#1e2738] text-white text-xs px-4 py-3 rounded-xl shadow-2xl border border-emerald-500/50 flex items-center gap-2.5 max-w-[92vw]">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
           <span className="break-words">{toastMessage}</span>
+        </div>
+      )}
+
+      {wasKicked && (
+        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#141822] border border-red-500/40 rounded-2xl w-full max-w-sm p-6 text-center">
+            <div className="w-14 h-14 mx-auto rounded-full bg-red-500/15 border border-red-500/40 flex items-center justify-center mb-3">
+              <span className="text-2xl">🚫</span>
+            </div>
+            <h2 className="text-white font-bold text-base">Você foi desconectado da call</h2>
+            <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">
+              O dono da sala removeu você. Peça um novo link para entrar de novo.
+            </p>
+            <button
+              onClick={() => {
+                window.location.href = window.location.pathname;
+              }}
+              className="mt-4 w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold touch-manipulation"
+            >
+              Voltar ao início
+            </button>
+          </div>
         </div>
       )}
 
@@ -609,30 +842,19 @@ export function App() {
         onToggleMute={handleToggleMic}
       />
 
-      <VideoSourceModal
-        isOpen={isVideoSourceModalOpen}
-        onClose={() => setIsVideoSourceModalOpen(false)}
-        onSelectVideoSource={(title, url, type) => {
-          setStreamState({ type, stream: null, videoUrl: url, title, quality: streamQuality, isSharing: true, isPaused: false });
-          addSystemMessage(`Prévia local: ${title}. Use Tela/Câmera para todos verem.`);
-        }}
+      <BetaMediaModal
+        isOpen={isBetaOpen}
+        onClose={() => setIsBetaOpen(false)}
+        onAdd={handleAddBeta}
+        initialPlatform={betaInitialPlatform}
       />
 
-      <YouTubeModal
-        isOpen={isYouTubeModalOpen}
-        onClose={() => setIsYouTubeModalOpen(false)}
-        onStartWatchParty={(videoUrl, title) => {
-          setStreamState({ type: 'youtube', stream: null, videoUrl, title, quality: '1080p HD', isSharing: true, isPaused: false });
-          addSystemMessage(`Prévia local: ${title}. Compartilhe a tela p/ todos verem.`);
-          liveRoom.sendChat({
-            id: `${Date.now()}-yt`,
-            sender: currentUserName,
-            avatar: userAvatar,
-            text: `▶ Assistindo: ${title}`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            color: 'text-emerald-400',
-          });
-        }}
+      <MobileScreenShareModal
+        isOpen={isMobileShareOpen}
+        onClose={() => setIsMobileShareOpen(false)}
+        onNativeScreen={() => attemptNativeScreenShare()}
+        onRearCamera={() => handleRearCameraShare()}
+        onOpenFile={() => handleMobileOpenFile()}
       />
 
       <MusicPlayerModal isOpen={isMusicModalOpen} onClose={() => setIsMusicModalOpen(false)} />

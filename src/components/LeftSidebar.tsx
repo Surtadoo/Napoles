@@ -11,6 +11,7 @@ import {
   Signal,
   Wifi,
   Loader2,
+  UserX,
 } from 'lucide-react';
 import { Participant } from '../types';
 
@@ -21,6 +22,8 @@ interface LeftSidebarProps {
   connectionStatus: 'idle' | 'connecting' | 'connected';
   shareUrl: string;
   className?: string;
+  isOwner: boolean;
+  onKickParticipant: (peerId: string, name: string) => void;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -29,6 +32,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   connectionStatus,
   shareUrl,
   className = '',
+  isOwner,
+  onKickParticipant,
 }) => {
   const [showTransformPrompt, setShowTransformPrompt] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -131,13 +136,26 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   ) : null}
                 </div>
               </div>
-              <div className="shrink-0 text-gray-400">
+              <div className="shrink-0 flex items-center gap-1.5">
                 {user.isMuted ? (
                   <MicOff className="w-3.5 h-3.5 text-red-400" />
                 ) : user.isSpeaking ? (
                   <Mic className="w-3.5 h-3.5 text-green-400 animate-bounce" />
                 ) : (
                   <Volume2 className="w-3.5 h-3.5 text-gray-400" />
+                )}
+                {isOwner && user.id !== 'current-user' && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`Desconectar ${user.name} da call?`)) {
+                        onKickParticipant(user.id, user.name);
+                      }
+                    }}
+                    title={`Desconectar ${user.name} da call`}
+                    className="p-1.5 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors touch-manipulation"
+                  >
+                    <UserX className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
             </div>
