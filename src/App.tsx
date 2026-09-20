@@ -264,6 +264,39 @@ export function App() {
 
   const { remotePeersList, remoteStreams, connectionStatus } = liveRoom;
 
+  // se trocar a qualidade no meio da transmissão, reaplica na trilha + bitrate
+  useEffect(() => {
+    if (!streamState.isSharing || !streamState.stream) return;
+    const track = streamState.stream.getVideoTracks()[0];
+    if (!track) return;
+    const want4k = /4k|2160/i.test(streamQuality);
+    (async () => {
+      try {
+        if (want4k) {
+          await track
+            .applyConstraints({
+              width: { ideal: 3840 },
+              height: { ideal: 2160 },
+              frameRate: { ideal: 60 },
+            } as any)
+            .catch(() => {});
+        } else if (/1080/i.test(streamQuality)) {
+          await track
+            .applyConstraints({
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 60 },
+            } as any)
+            .catch(() => {});
+        }
+      } catch {}
+      try {
+        liveRoom.boostSenders(streamQuality);
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamQuality]);
+
   const participants: Participant[] = useMemo(() => {
     const list: Participant[] = [];
     if (currentUserName) {
@@ -442,7 +475,21 @@ export function App() {
         audio: true,
       });
       const videoTrack = mediaStream.getVideoTracks()[0];
-      if (videoTrack) videoTrack.onended = () => handleStopSharing();
+      // força a resolução máxima que o monitor permitir (4K de verdade)
+      if (videoTrack) {
+        videoTrack.onended = () => handleStopSharing();
+        try {
+          if (want4k) {
+            await videoTrack
+              .applyConstraints({
+                width: { ideal: 3840 },
+                height: { ideal: 2160 },
+                frameRate: { ideal: 60 },
+              } as any)
+              .catch(() => {});
+          }
+        } catch {}
+      }
       const activeName = currentUserName || 'Você';
       setStreamState({
         type: 'screen',
@@ -453,15 +500,35 @@ export function App() {
         isPaused: false,
       });
       liveRoom.publishStream(mediaStream, 'screen', 'screen-local');
+      // bitrate alto p/ manter a qualidade escolhida (senão o WebRTC derruba p/ 1080p)
+      setTimeout(() => {
+        try {
+          liveRoom.boostSenders(streamQuality);
+        } catch {}
+        try {
+          liveRoom.boostSenders(streamQuality);
+        } catch {}
+      }, 1200);
+      setTimeout(() => {
+        try {
+          liveRoom.boostSenders(streamQuality);
+        } catch {}
+      }, 3500);
       const track = mediaStream.getVideoTracks()[0];
       const set = track?.getSettings?.();
       const realRes = set?.width && set?.height ? ` (${set.width}×${set.height})` : '';
       addSystemMessage(`${activeName} compartilha a tela${realRes} — todos veem ao vivo.`);
-      showToast(
-        want4k
-          ? `Tela em 4K ao vivo${realRes}! Todos na sala veem.`
-          : 'Tela ao vivo! Todos na sala veem.'
-      );
+      if (want4k && set?.width && set.width < 3000) {
+        showToast(
+          `Atenção: seu monitor é ${set.width}×${set.height}, então o navegador não consegue capturar 4K real. Subi o bitrate ao máximo para a melhor imagem possível${realRes}.`
+        );
+      } else {
+        showToast(
+          want4k
+            ? `Tela em 4K ao vivo${realRes}! Todos na sala veem.`
+            : 'Tela ao vivo! Todos na sala veem.'
+        );
+      }
     } catch (err: unknown) {
       const error = err as Error;
       if (error?.name === 'NotAllowedError') showToast('Compartilhamento cancelado.');

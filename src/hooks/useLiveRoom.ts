@@ -336,10 +336,15 @@ export function useLiveRoom({
     try {
       (room as any).onPeerStream = (stream: MediaStream, peerId: string, metadata: any) => {
         if (cancelled || !stream) return;
+        // ignora stream sem trilha de vídeo viva (evita tile cinza)
+        const liveVideo = stream.getVideoTracks().filter((t) => t.readyState === 'live');
+        const hasLiveVideo = liveVideo.length > 0;
+        const hasAudio = stream.getAudioTracks().length > 0;
+        if (!hasLiveVideo && !hasAudio) return;
         const kind =
           metadata?.kind === 'screen' || metadata?.kind === 'camera' || metadata?.kind === 'mic'
             ? metadata.kind
-            : stream.getVideoTracks().length > 0
+            : hasLiveVideo
               ? 'unknown'
               : 'mic';
         const key = `${peerId}-${stream.id}`;
@@ -390,10 +395,34 @@ export function useLiveRoom({
         });
 
         setRemoteStreams((prev) => {
-          if (prev.some((s) => s.key === key)) {
-            return prev.map((s) => (s.key === key ? { ...s, stream, kind: kind as any, ownerName } : s));
+          // agrupa por peer + tipo (evita tela duplicada do mesmo peer)
+          const sameGroup = (a: string, b: string) => {
+            if (a === 'mic' || b === 'mic') return a === b;
+            if (a === 'unknown' || b === 'unknown') return true;
+            return a === b;
+          };
+          const k = kind as string;
+          // remove duplicadas antigas do mesmo grupo (mantém só a mais nova)
+          const stale = prev.filter(
+            (s) => s.peerId === peerId && s.key !== key && sameGroup(s.kind as string, k)
+          );
+          stale.forEach((d) => {
+            const a = audioElsRef.current.get(d.key);
+            if (a) {
+              try {
+                a.pause();
+                (a as any).srcObject = null;
+              } catch {}
+              audioElsRef.current.delete(d.key);
+            }
+          });
+          let next = prev.filter(
+            (s) => !(s.peerId === peerId && s.key !== key && sameGroup(s.kind as string, k))
+          );
+          if (next.some((s) => s.key === key)) {
+            return next.map((s) => (s.key === key ? { ...s, stream, kind: kind as any, ownerName } : s));
           }
-          return [...prev, { key, peerId, stream, kind: kind as any, ownerName }];
+          return [...next, { key, peerId, stream, kind: kind as any, ownerName }];
         });
         setConnectionStatus('connected');
       };
@@ -464,6 +493,33 @@ export function useLiveRoom({
         });
         if (Array.isArray(r)) r.forEach((p: any) => (p as Promise<void>)?.catch?.(() => {}));
       } catch {}
+      // reforça bitrate alto logo após publicar (evita WebRTC derrubar p/ 1080p)
+      setTimeout(() => {
+        try {
+          const peers = room?.getPeers ? room.getPeers() : {};
+          Object.values(peers || {}).forEach((pc: any) => {
+            try {
+              const senders = pc?.getSenders ? pc.getSenders() : [];
+              (senders || []).forEach((sender: any) => {
+                try {
+                  if (!sender?.track || sender.track.kind !== 'video') return;
+                  const params = sender.getParameters ? sender.getParameters() : {};
+                  if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+                  params.encodings = params.encodings.map((e: any) => ({
+                    ...e,
+                    maxBitrate: 8000000,
+                    scaleResolutionDownBy: 1,
+                  }));
+                  try {
+                    params.degradationPreference = 'maintain-resolution';
+                  } catch {}
+                  if (sender.setParameters) sender.setParameters(params).catch(() => {});
+                } catch {}
+              });
+            } catch {}
+          });
+        } catch {}
+      }, 900);
     },
     []
   );
@@ -477,6 +533,42 @@ export function useLiveRoom({
     }
     try {
       roomRef.current?.removeStream?.(stream);
+    } catch {}
+  }, []);
+
+  /** Aumenta o bitrate dos senders de vídeo (4K/1080p real). */
+  const boostSenders = useCallback((qualityLabel?: string) => {
+    const q = (qualityLabel || '').toLowerCase();
+    const is4k = q.includes('4k') || q.includes('2160');
+    const is1080 = q.includes('1080');
+    const maxBitrate = is4k ? 12000000 : is1080 ? 5000000 : q.includes('720') ? 2500000 : 1500000;
+    const degradation = is4k || is1080 ? 'maintain-resolution' : ('balanced' as any);
+    try {
+      const room = roomRef.current;
+      const peers = room?.getPeers ? room.getPeers() : {};
+      Object.values(peers || {}).forEach((pc: any) => {
+        try {
+          const senders = pc?.getSenders ? pc.getSenders() : [];
+          (senders || []).forEach((sender: any) => {
+            try {
+              if (!sender?.track || sender.track.kind !== 'video') return;
+              const params = sender.getParameters ? sender.getParameters() : {};
+              if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+              params.encodings = params.encodings.map((e: any) => ({
+                ...e,
+                maxBitrate,
+                ...(is4k ? { scaleResolutionDownBy: 1 } : {}),
+              }));
+              try {
+                params.degradationPreference = degradation;
+              } catch {}
+              if (sender.setParameters) {
+                sender.setParameters(params).catch(() => {});
+              }
+            } catch {}
+          });
+        } catch {}
+      });
     } catch {}
   }, []);
 
@@ -540,6 +632,7 @@ export function useLiveRoom({
     unpublishStream,
     cleanupRoom,
     kickPeer,
+    boostSenders,
     myPeerId: selfId as string,
     sharedMedia,
     broadcastMedia,

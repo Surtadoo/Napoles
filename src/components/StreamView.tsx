@@ -234,7 +234,7 @@ function FocusedOverlay({
             controls
             autoPlay
             playsInline
-            className="max-w-full max-h-full object-contain"
+            className="w-full h-full object-contain bg-black"
           />
         ) : isYoutube && localState.videoUrl ? (
           <iframe
@@ -249,8 +249,9 @@ function FocusedOverlay({
             ref={videoRef}
             autoPlay
             playsInline
+            muted
             controls={false}
-            className="max-w-full max-h-full object-contain"
+            className="w-full h-full object-contain bg-black"
           />
         )}
       </div>
@@ -272,11 +273,13 @@ function RemoteTile({
   const tileRef = useRef<HTMLDivElement | null>(null);
   const [fit, setFit] = useState<'contain' | 'cover'>('contain');
   const [hidden, setHidden] = useState(false);
-  const hasVideo = info.stream.getVideoTracks().length > 0;
+  // só mostra tile com vídeo VIVO (evita cinza/bug de track encerrada)
+  const hasVideo = info.stream.getVideoTracks().some((t) => t.readyState === 'live');
 
   useEffect(() => {
     if (ref.current && hasVideo && !hidden) {
       ref.current.srcObject = info.stream;
+      ref.current.muted = true;
       ref.current.play().catch(() => {});
     }
   }, [info.stream, hasVideo, hidden]);
@@ -288,20 +291,21 @@ function RemoteTile({
   return (
     <div
       ref={tileRef}
-      className="relative rounded-xl overflow-hidden bg-black border border-[#2b354a] shadow-xl min-h-[220px] flex items-center justify-center group"
+      className="relative rounded-xl overflow-hidden bg-black border border-[#2b354a]/80 shadow-md min-h-[140px] flex items-center justify-center group"
     >
       {hidden ? (
-        <div className="w-full max-h-[42vh] min-h-[180px] flex flex-col items-center justify-center gap-2 text-gray-400">
-          <EyeOff className="w-8 h-8" />
-          <p className="text-xs font-medium">Vídeo oculto — só áudio</p>
-          <p className="text-[11px] text-gray-500">{label}</p>
+        <div className="w-full max-h-[24vh] min-h-[120px] flex flex-col items-center justify-center gap-1.5 text-gray-400">
+          <EyeOff className="w-6 h-6" />
+          <p className="text-[11px] font-medium">Vídeo oculto — só áudio</p>
+          <p className="text-[10px] text-gray-500">{label}</p>
         </div>
       ) : (
         <video
           ref={ref}
           autoPlay
           playsInline
-          className={`w-full h-full max-h-[42vh] ${fit === 'contain' ? 'object-contain' : 'object-cover'}`}
+          muted
+          className={`w-full h-full max-h-[24vh] bg-black ${fit === 'contain' ? 'object-contain' : 'object-cover'}`}
         />
       )}
       <div className="absolute top-2 left-2 flex items-center gap-1.5 max-w-[calc(100%-13rem)]">
@@ -383,25 +387,25 @@ function SharedVideoTile({
   return (
     <div
       ref={tileRef}
-      className="relative rounded-xl overflow-hidden bg-black border border-teal-500/50 shadow-xl min-h-[220px] flex items-center justify-center group"
+      className="relative rounded-xl overflow-hidden bg-black border-2 border-teal-500/60 shadow-2xl shadow-teal-950/30 min-h-[320px] md:col-span-2 xl:col-span-3 flex items-center justify-center group"
     >
       {hiddenVideo ? (
-        <div className="w-full max-h-[42vh] min-h-[180px] flex flex-col items-center justify-center gap-2 text-gray-400">
-          <EyeOff className="w-8 h-8" />
-          <p className="text-xs font-medium">Vídeo oculto — {audioMuted ? 'sem áudio' : 'só áudio'}</p>
-          <p className="text-[11px] text-gray-500 truncate max-w-[80%]">{media.title}</p>
+        <div className="w-full max-h-[58vh] min-h-[280px] flex flex-col items-center justify-center gap-2 text-gray-400">
+          <EyeOff className="w-10 h-10" />
+          <p className="text-sm font-medium">Vídeo oculto — {audioMuted ? 'sem áudio' : 'só áudio'}</p>
+          <p className="text-xs text-gray-500 truncate max-w-[80%]">{media.title}</p>
         </div>
       ) : !playableUrl ? (
-        <div className="w-full max-h-[42vh] min-h-[180px] flex flex-col items-center justify-center gap-2 text-gray-400 p-4 text-center">
-          <FileVideo className="w-8 h-8 text-sky-400" />
-          <p className="text-xs font-medium">Arquivo local de {media.leaderName}</p>
-          <p className="text-[11px] text-gray-500">Só ele vê — peça para compartilhar a tela.</p>
+        <div className="w-full max-h-[58vh] min-h-[280px] flex flex-col items-center justify-center gap-2 text-gray-400 p-4 text-center">
+          <FileVideo className="w-10 h-10 text-sky-400" />
+          <p className="text-sm font-medium">Arquivo local de {media.leaderName}</p>
+          <p className="text-xs text-gray-500">Só ele vê — peça para compartilhar a tela.</p>
         </div>
       ) : isEmbed && iframeSrc ? (
         <iframe
           key={iframeSrc}
           src={iframeSrc}
-          className="w-full h-full min-h-[220px] max-h-[42vh] border-0"
+          className="w-full h-full min-h-[320px] max-h-[58vh] border-0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
           title={media.title}
@@ -414,7 +418,7 @@ function SharedVideoTile({
           autoPlay
           playsInline
           muted={audioMuted}
-          className={`w-full h-full max-h-[42vh] ${fit === 'contain' ? 'object-contain' : 'object-cover'}`}
+          className={`w-full h-full max-h-[58vh] min-h-[280px] ${fit === 'contain' ? 'object-contain' : 'object-cover'}`}
         />
       )}
 
@@ -494,7 +498,8 @@ export const StreamView: React.FC<StreamViewProps> = ({
   const localTileRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
+  // prévia local começa mutada (evita eco + libera autoplay, sem tela cinza)
+  const [isMuted, setIsMuted] = useState(true);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [focused, setFocused] = useState<FocusedItem | null>(null);
   const [localFit, setLocalFit] = useState<'contain' | 'cover'>('contain');
@@ -552,7 +557,10 @@ export const StreamView: React.FC<StreamViewProps> = ({
     return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const videoRemotes = remoteStreams.filter((r) => r.stream.getVideoTracks().length > 0);
+  // só conta vídeo com trilha viva (tile morto não entra na grade)
+  const videoRemotes = remoteStreams.filter((r) =>
+    r.stream.getVideoTracks().some((t) => t.readyState === 'live')
+  );
   const hasSharedVideo = !!sharedVideo;
   const hasAnyStream = streamState.isSharing || videoRemotes.length > 0 || hasSharedVideo;
   const tileCount =
@@ -595,14 +603,14 @@ export const StreamView: React.FC<StreamViewProps> = ({
           <div
             className={
               showGrid
-                ? 'grid grid-cols-1 xl:grid-cols-2 gap-3 items-start'
+                ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start'
                 : 'relative w-full h-full flex items-center justify-center bg-black rounded-xl overflow-hidden min-h-[50vh]'
             }
           >
             {streamState.isSharing && (
               <div
                 ref={localTileRef}
-                className={`relative group ${showGrid ? 'rounded-xl overflow-hidden bg-black border border-emerald-500/40 min-h-[220px] flex items-center justify-center' : 'w-full h-full flex items-center justify-center'}`}
+                className={`relative group ${showGrid ? 'rounded-xl overflow-hidden bg-black border-2 border-emerald-500/50 shadow-xl min-h-[300px] md:col-span-2 xl:col-span-2 flex items-center justify-center' : 'w-full h-full flex items-center justify-center'}`}
               >
                 {streamState.type === 'youtube' && streamState.videoUrl ? (
                   <iframe
@@ -613,9 +621,9 @@ export const StreamView: React.FC<StreamViewProps> = ({
                     title="YouTube Stream"
                   />
                 ) : localHidden ? (
-                  <div className="w-full max-h-[42vh] min-h-[180px] flex flex-col items-center justify-center gap-2 text-gray-400">
-                    <EyeOff className="w-8 h-8" />
-                    <p className="text-xs font-medium">Sua prévia oculta — os outros ainda veem</p>
+                  <div className="w-full max-h-[52vh] min-h-[260px] flex flex-col items-center justify-center gap-2 text-gray-400">
+                    <EyeOff className="w-9 h-9" />
+                    <p className="text-sm font-medium">Sua prévia oculta — os outros ainda veem</p>
                   </div>
                 ) : (
                   <video
@@ -625,7 +633,7 @@ export const StreamView: React.FC<StreamViewProps> = ({
                     muted={isMuted}
                     className={
                       showGrid
-                        ? `w-full max-h-[42vh] ${localFit === 'contain' ? 'object-contain' : 'object-cover'}`
+                        ? `w-full max-h-[52vh] min-h-[260px] ${localFit === 'contain' ? 'object-contain' : 'object-cover'}`
                         : `max-w-full max-h-full ${localFit === 'contain' ? 'object-contain' : 'object-cover'}`
                     }
                   />
