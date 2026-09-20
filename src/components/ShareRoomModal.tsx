@@ -6,6 +6,8 @@ interface ShareRoomModalProps {
   onClose: () => void;
   roomName: string;
   roomCode: string;
+  userName?: string;
+  onRefreshCode?: () => void;
 }
 
 export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
@@ -13,8 +15,11 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   onClose,
   roomName,
   roomCode,
+  userName = 'Amigo',
+  onRefreshCode,
 }) => {
   const [copied, setCopied] = useState(false);
+  const inviteUrl = `https://livedc.me/?user=${encodeURIComponent(userName)}&join=livedc`;
   const roomUrl = `https://livedc.me/watch/priv-${roomName}-${roomCode}`;
 
   if (!isOpen) return null;
@@ -70,6 +75,32 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
             </div>
           </div>
 
+          {/* Link para convidar com nome automático */}
+          <div>
+            <label className="text-xs text-gray-400 font-medium block mb-1.5">
+              Link para convidar com nome
+            </label>
+            <div className="flex items-center gap-2 bg-[#0d1017] border border-[#263045] rounded-xl p-2">
+              <input
+                type="text"
+                readOnly
+                value={inviteUrl}
+                className="bg-transparent text-xs text-emerald-300 font-mono flex-1 outline-none truncate"
+              />
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(inviteUrl);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow"
+              >
+                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>Copiar convite</span>
+              </button>
+            </div>
+          </div>
+
           {/* Room PIN / Access code */}
           <div className="flex items-center justify-between bg-[#19202e] p-3 rounded-xl border border-[#27344c]">
             <div className="flex items-center gap-2">
@@ -83,6 +114,18 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
               {roomCode}
             </span>
           </div>
+
+          {/* Botão trocar código */}
+          {onRefreshCode && (
+            <button
+              onClick={() => {
+                onRefreshCode?.();
+              }}
+              className="w-full py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold shadow-lg shadow-amber-900/30 transition-all active:scale-[0.99] flex items-center justify-center gap-2"
+            >
+              <span>Trocar código de compartilhamento</span>
+            </button>
+          )}
 
           {/* Social share buttons */}
           <div className="grid grid-cols-2 gap-2 pt-2">

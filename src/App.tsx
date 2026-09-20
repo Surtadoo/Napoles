@@ -11,6 +11,7 @@ import { YouTubeModal } from './components/YouTubeModal';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
+import { AccessCodeModal } from './components/AccessCodeModal';
 import { Participant, ChatMessage, StreamState } from './types';
 import { initAntiInspectionAndProtection } from './utils/security';
 
@@ -22,12 +23,47 @@ export function App() {
 
   // Room State
   const [roomName] = useState('Time_do_Sky');
-  const [roomCode] = useState('489059');
+  const [roomCode, setRoomCode] = useState('489059');
   const [isPrivate] = useState(true);
 
   // User Name prompt modal
   const [currentUserName, setCurrentUserName] = useState<string>('');
   const [isNameModalOpen, setIsNameModalOpen] = useState(true);
+
+  // Read URL params to allow shared entry with user name and access code
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedName = params.get('user') || params.get('nome');
+    const invite = params.get('join');
+
+    if (invite === 'livedc') {
+      // Shared invite requires access code
+      if (sharedName) {
+        setSharedInviteName(sharedName.trim().substring(0, 20));
+      }
+      setIsAccessCodeOpen(true);
+    } else if (sharedName) {
+      // Direct user link without invite
+      const cleanName = sharedName.trim().substring(0, 20);
+      if (cleanName) {
+        const userP: Participant = {
+          id: 'current-user',
+          name: cleanName,
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
+          isOwner: true,
+          isMuted: true,
+          isSpeaking: false,
+          isScreenSharing: false,
+          tag: 'você',
+        };
+        setCurrentUserName(cleanName);
+        setIsNameModalOpen(false);
+        setParticipants([userP]);
+        addSystemMessage(`${cleanName} entrou na sala privada.`);
+        showToast(`Bem-vindo à sala, ${cleanName}!`);
+      }
+    }
+  }, []);
 
   // Audio / Media Controls State
   const [isMuted, setIsMuted] = useState(true);
@@ -62,6 +98,8 @@ export function App() {
   const [streamerMode, setStreamerMode] = useState(false);
 
   // Modals State
+  const [isAccessCodeOpen, setIsAccessCodeOpen] = useState(false);
+  const [sharedInviteName, setSharedInviteName] = useState('');
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isVideoSourceModalOpen, setIsVideoSourceModalOpen] = useState(false);
@@ -343,6 +381,33 @@ export function App() {
     setUserPoints((prev) => prev + 5);
   };
 
+  const handleRefreshCode = () => {
+    const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+    setRoomCode(newCode);
+    showToast('Código de acesso atualizado!');
+  };
+
+  const handleAccessGranted = (userName: string) => {
+    setIsAccessCodeOpen(false);
+    setCurrentUserName(userName);
+    const userP: Participant = {
+      id: 'shared-user',
+      name: userName,
+      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop&crop=face',
+      isMuted: true,
+      isSpeaking: false,
+      isScreenSharing: false,
+      tag: 'via link',
+      isGuest: true,
+    };
+    setParticipants((prev) => {
+      const withoutGuest = prev.filter(p => p.id !== 'guest-shared');
+      return [...withoutGuest, userP];
+    });
+    addSystemMessage(`${userName} entrou na sala via link compartilhado.`);
+    showToast(`Bem-vindo à sala, ${userName}!`);
+  };
+
   const handleAddParticipant = () => {
     const names = ['Pedro_Gamer', 'Larissa_FPS', 'CyberVitor', 'Ana_Play', 'Lucas_Live'];
     const chosenName = names[Math.floor(Math.random() * names.length)];
@@ -361,6 +426,15 @@ export function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0d0f12] text-gray-200 select-none">
+      {/* Access Code modal for shared invite */}
+      <AccessCodeModal
+        isOpen={isAccessCodeOpen}
+        onAccessGranted={handleAccessGranted}
+        onClose={() => setIsAccessCodeOpen(false)}
+        expectedCode={roomCode}
+        userName={sharedInviteName}
+      />
+
       {/* Name Input modal when joining */}
       <NamePromptModal
         isOpen={isNameModalOpen}
@@ -454,6 +528,8 @@ export function App() {
         onClose={() => setIsShareModalOpen(false)}
         roomName={roomName}
         roomCode={roomCode}
+        userName={currentUserName || 'Você'}
+        onRefreshCode={handleRefreshCode}
       />
 
       <SettingsModal
