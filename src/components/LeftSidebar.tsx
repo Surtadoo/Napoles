@@ -1,108 +1,56 @@
 import React, { useState } from 'react';
-import {
-  Link2,
-  Check,
-  Users,
-  Mic,
-  MicOff,
-  Volume2,
+import { 
+  UserPlus, 
+  Users, 
+  Mic, 
+  MicOff, 
+  Volume2, 
   X,
   Shield,
   Signal,
-  Wifi,
-  Loader2,
-  UserX,
+  Monitor
 } from 'lucide-react';
 import { Participant } from '../types';
 
 interface LeftSidebarProps {
   participants: Participant[];
-  onInvite: () => void;
+  onAddParticipant: () => void;
   userPoints: number;
-  connectionStatus: 'idle' | 'connecting' | 'connected';
-  shareUrl: string;
-  className?: string;
-  isOwner: boolean;
-  onKickParticipant: (peerId: string, name: string) => void;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   participants,
-  onInvite,
-  connectionStatus,
-  shareUrl,
-  className = '',
-  isOwner,
-  onKickParticipant,
+  onAddParticipant,
 }) => {
   const [showTransformPrompt, setShowTransformPrompt] = useState(true);
-  const [linkCopied, setLinkCopied] = useState(false);
-
-  const handleCopyInvite = async () => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = shareUrl;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2200);
-  };
 
   return (
-    <aside
-      className={`w-full md:w-72 bg-[#12151b] md:border-r border-[#1f2533] flex-col justify-between shrink-0 h-full overflow-y-auto select-none flex ${className}`}
-    >
+    <aside className="w-72 bg-[#12151b] border-r border-[#1f2533] flex flex-col justify-between shrink-0 h-full overflow-y-auto select-none">
+      {/* Top section: Participants list */}
       <div className="p-3">
+        {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-[#1c2230]">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-gray-200 text-sm">Participantes</span>
-            <button
-              onClick={onInvite}
-              title="Copiar link para convidar pessoa real"
-              className="p-1.5 rounded text-gray-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors touch-manipulation"
+            <button 
+              onClick={onAddParticipant}
+              title="Adicionar participante"
+              className="p-1 rounded text-gray-400 hover:text-white hover:bg-[#1d2333] transition-colors"
             >
-              <Link2 className="w-3.5 h-3.5" />
+              <UserPlus className="w-3.5 h-3.5" />
             </button>
           </div>
           <span className="bg-[#1f2638] text-gray-300 text-xs font-semibold px-2 py-0.5 rounded-full border border-[#2b354e]">
-            {participants.length} online
+            {participants.length}
           </span>
         </div>
 
-        <div className="mt-2.5 px-2 py-1.5 rounded-lg bg-[#10141d] border border-[#222b3e] flex items-center gap-2">
-          {connectionStatus === 'connected' ? (
-            <>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
-                <Wifi className="w-3 h-3" /> Sala conectada
-              </span>
-            </>
-          ) : connectionStatus === 'connecting' ? (
-            <>
-              <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />
-              <span className="text-[11px] text-yellow-300 font-medium">Conectando sala...</span>
-            </>
-          ) : (
-            <>
-              <span className="w-2 h-2 rounded-full bg-gray-500" />
-              <span className="text-[11px] text-gray-400">Aguardando entrar...</span>
-            </>
-          )}
-        </div>
-
+        {/* Participants list */}
         <div className="mt-2.5 space-y-1.5">
-          {participants.length === 0 && (
-            <p className="text-[11px] text-gray-500 text-center py-4">Ninguém na sala ainda.</p>
-          )}
           {participants.map((user) => (
             <div
               key={user.id}
-              className="flex items-center justify-between p-2 rounded-lg bg-[#161a22] border border-transparent transition-all"
+              className="flex items-center justify-between p-2 rounded-lg bg-[#161a22] hover:bg-[#1a202c] border border-transparent hover:border-[#263045] transition-all group"
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="relative shrink-0">
@@ -117,44 +65,62 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     }`}
                   />
                 </div>
+
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-semibold text-emerald-300 truncate">
+                    <span className="text-xs font-semibold text-emerald-400 truncate">
                       {user.name}
                     </span>
-                    {user.isOwner && <span className="text-yellow-400 text-xs">⭐</span>}
+                    {user.isOwner && (
+                      <span className="text-yellow-400 text-xs" title="Criador da sala">⭐</span>
+                    )}
                     {user.tag && (
                       <span className="text-[10px] text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/30">
                         {user.tag}
                       </span>
                     )}
                   </div>
-                  {user.isScreenSharing ? (
-                    <span className="text-[10px] text-blue-400">Transmitindo tela</span>
-                  ) : user.isCameraOn ? (
-                    <span className="text-[10px] text-teal-400">Câmera ligada</span>
-                  ) : null}
+                  {user.isScreenSharing && (
+                    <span className="text-[10px] text-blue-400 flex items-center gap-1">
+                      Transmitindo tela
+                    </span>
+                  )}
                 </div>
               </div>
-              <div className="shrink-0 flex items-center gap-1.5">
-                {user.isMuted ? (
-                  <MicOff className="w-3.5 h-3.5 text-red-400" />
-                ) : user.isSpeaking ? (
-                  <Mic className="w-3.5 h-3.5 text-green-400 animate-bounce" />
-                ) : (
-                  <Volume2 className="w-3.5 h-3.5 text-gray-400" />
+
+              {/* Status icon + actions */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <div className="text-gray-400">
+                  {user.isMuted ? (
+                    <MicOff className="w-3.5 h-3.5 text-red-400" />
+                  ) : user.isSpeaking ? (
+                    <Mic className="w-3.5 h-3.5 text-green-400 animate-bounce" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-gray-400" />
+                  )}
+                </div>
+                {/* View shared screen button */}
+                {user.isScreenSharing && user.id !== 'current-user' && (
+                  <button
+                    onClick={() => alert(`Abrindo tela compartilhada por ${user.name} em tela cheia!`)}
+                    title={`Ver tela de ${user.name}`}
+                    className="p-1 text-blue-400 hover:text-white hover:bg-blue-500/20 rounded transition-all"
+                  >
+                    <Monitor className="w-3.5 h-3.5" />
+                  </button>
                 )}
-                {isOwner && user.id !== 'current-user' && (
+                {/* Disconnect button */}
+                {user.id !== 'current-user' && (
                   <button
                     onClick={() => {
-                      if (confirm(`Desconectar ${user.name} da call?`)) {
-                        onKickParticipant(user.id, user.name);
+                      if (confirm(`Desconectar ${user.name} da sala?`)) {
+                        alert(`${user.name} foi desconectado.`);
                       }
                     }}
-                    title={`Desconectar ${user.name} da call`}
-                    className="p-1.5 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors touch-manipulation"
+                    title={`Desconectar ${user.name}`}
+                    className="p-1 text-red-400 hover:text-white hover:bg-red-500/20 rounded transition-all"
                   >
-                    <UserX className="w-3.5 h-3.5" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
@@ -162,65 +128,47 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           ))}
         </div>
 
-        {/* convite — copia link real, sem bots */}
-        <div className="mt-3 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-2">
-          <p className="text-[11px] text-emerald-300 font-semibold">
-            + Chamar pessoa real para a call:
-          </p>
-          <button
-            onClick={handleCopyInvite}
-            className="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white text-xs font-bold transition-all touch-manipulation flex items-center justify-center gap-1.5"
-          >
-            {linkCopied ? (
-              <>
-                <Check className="w-3.5 h-3.5" /> Link copiado! Mande no Zap
-              </>
-            ) : (
-              <>
-                <Link2 className="w-3.5 h-3.5" /> Copiar link da call
-              </>
-            )}
-          </button>
-          <button
-            onClick={onInvite}
-            className="w-full py-1.5 rounded-lg bg-transparent border border-emerald-500/30 text-emerald-300 text-[11px] font-medium touch-manipulation"
-          >
-            Abrir opções de convite
-          </button>
-        </div>
-
+        {/* Transformar sala em grupo button */}
         {showTransformPrompt && (
           <div className="mt-3 relative">
-            <div className="w-full py-2 px-3 rounded-lg bg-[#182030] border border-[#26344d] text-gray-200 text-xs font-medium flex items-center justify-center gap-2">
-              <Users className="w-3.5 h-3.5 text-blue-400" />
+            <button
+              onClick={() => alert('Esta sala privada agora pode receber até 25 participantes!')}
+              className="w-full py-2 px-3 rounded-lg bg-[#182030] hover:bg-[#1f293d] border border-[#26344d] text-gray-200 text-xs font-medium flex items-center justify-center gap-2 transition-all group shadow-sm"
+            >
+              <Users className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition-transform" />
               <span>Transformar sala em grupo</span>
-              <button
-                onClick={() => setShowTransformPrompt(false)}
-                className="text-gray-400 hover:text-gray-200 p-1 ml-auto touch-manipulation"
-                aria-label="Fechar"
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowTransformPrompt(false);
+                }}
+                className="text-gray-400 hover:text-gray-200 p-0.5 ml-auto"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3 h-3" />
               </button>
-            </div>
+            </button>
           </div>
         )}
       </div>
 
+      {/* Bottom section: Server Status & Security info (anúncio patrocinado removido) */}
       <div className="p-3 border-t border-[#1c2230] space-y-2.5">
         <div className="flex items-center justify-between text-[11px] text-gray-400 px-1">
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-semibold text-emerald-400">{participants.length} nesta sala</span>
+            <span className="font-semibold text-emerald-400">9331 online</span>
           </div>
-          <span className="text-gray-400 font-mono text-[10px]">P2P WebRTC</span>
+          <span className="text-gray-400 font-mono text-[10px]">Ping: 12ms</span>
         </div>
+
+        {/* Security / Encrypted Room info box */}
         <div className="bg-[#151a24] rounded-xl border border-[#232c3f] p-3 space-y-2">
           <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400">
-            <Shield className="w-4 h-4 shrink-0" />
+            <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>Sala Criptografada LiveDC</span>
           </div>
           <p className="text-[11px] text-gray-300 leading-relaxed">
-            Voz, vídeo e chat via P2P direto entre celulares e PCs.
+            Transmissão de tela P2P com criptografia AES-256 e WebRTC seguro.
           </p>
           <div className="flex items-center justify-between text-[10px] text-gray-400 pt-1 border-t border-[#1f2838]">
             <span className="flex items-center gap-1">

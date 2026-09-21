@@ -17,7 +17,6 @@ interface RightSidebarProps {
   streamerMode: boolean;
   onToggleStreamerMode: () => void;
   currentUserName: string;
-  className?: string;
 }
 
 const SAMPLE_GIFS = [
@@ -36,7 +35,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   streamerMode,
   onToggleStreamerMode,
   currentUserName,
-  className = '',
 }) => {
   const [inputText, setInputText] = useState('');
   const [showGifPicker, setShowGifPicker] = useState(false);
@@ -66,7 +64,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   };
 
   return (
-    <aside className={`w-full md:w-80 bg-[#12151b] md:border-l border-[#1f2533] flex-col justify-between shrink-0 h-full select-none z-10 flex ${className}`}>
+    <aside className="w-80 bg-[#12151b] border-l border-[#1f2533] flex flex-col justify-between shrink-0 h-full select-none z-10">
       {/* Top Header section */}
       <div className="border-b border-[#1f2533] relative">
         <div className="p-2.5 pb-1.5 flex items-center justify-between">
