@@ -77,7 +77,13 @@ export function useLiveRoom({
   const [sharedMedia, setSharedMedia] = useState<SharedMediaPayload | null>(null);
 
   const roomRef = useRef<any>(null);
-  const actionsRef = useRef<{ profile?: any; chat?: any; kick?: any; media?: any } | null>(null);
+  const actionsRef = useRef<{
+    profile?: any;
+    chat?: any;
+    kick?: any;
+    media?: any;
+    hello?: any;
+  } | null>(null);
   const localStreamsRef = useRef<Map<string, { stream: MediaStream; kind: string }>>(new Map());
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const roomCodeRef = useRef(roomCode);
@@ -158,7 +164,14 @@ export function useLiveRoom({
     const chatAction = room.makeAction('livedc-chat-v3');
     const kickAction = room.makeAction('livedc-kick-v1');
     const mediaAction = room.makeAction('livedc-media-v2');
-    actionsRef.current = { profile: profileAction, chat: chatAction, kick: kickAction, media: mediaAction };
+    const helloAction = room.makeAction('livedc-hello-v1');
+    actionsRef.current = {
+      profile: profileAction,
+      chat: chatAction,
+      kick: kickAction,
+      media: mediaAction,
+      hello: helloAction,
+    };
 
     // recebo ordem de expulsão? só obedeço se o alvo for o meu selfId
     try {
@@ -218,6 +231,63 @@ export function useLiveRoom({
       }
     };
 
+    // ---- ENTRADA RÁPIDA: "olá" trocado assim que a conexão abre ----
+    const greeted = new Set<string>();
+
+    const pushLocalStreamsTo = (peerId: string) => {
+      localStreamsRef.current.forEach(({ stream, kind }) => {
+        try {
+          room.addStream(stream, {
+            target: peerId,
+            metadata: { kind, owner: profileRef.current.userName },
+          });
+        } catch {}
+      });
+    };
+
+    const greetPeer = (peerId: string, forceAsk = false) => {
+      if (!peerId || cancelled) return;
+      broadcastProfile(peerId);
+      sendMediaTo(peerId);
+      pushLocalStreamsTo(peerId);
+      if (!greeted.has(peerId) || forceAsk) {
+        greeted.add(peerId);
+        try {
+          helloAction.send({ ask: true, by: profileRef.current.userName }, { target: peerId } as any);
+        } catch {
+          try {
+            (helloAction as any).send({ ask: true, by: profileRef.current.userName }, peerId);
+          } catch {}
+        }
+      }
+    };
+
+    try {
+      (helloAction as any).onMessage = (_data: any, meta: any) => {
+        const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
+        if (!peerId || cancelled) return;
+        // alguém novo chegou: manda meu perfil + meu vídeo/BETA imediatamente
+        broadcastProfile(peerId);
+        sendMediaTo(peerId);
+        pushLocalStreamsTo(peerId);
+      };
+    } catch {}
+
+    // varre peers conectados a cada 700ms nos primeiros ~14s (entrada quase instantânea)
+    let greetTicks = 0;
+    const greetPoll = setInterval(() => {
+      if (cancelled) return;
+      greetTicks += 1;
+      try {
+        const peers = room.getPeers ? room.getPeers() : {};
+        const ids = Object.keys(peers || {});
+        ids.forEach((pid) => greetPeer(pid));
+        // para de varrer quando já cumprimentou todo mundo e passou o tempo
+        if (greetTicks > 20 && ids.length === 0) clearInterval(greetPoll);
+        if (greetTicks > 20 && greeted.size >= ids.length) clearInterval(greetPoll);
+      } catch {}
+    }, 700);
+
     try {
       (profileAction as any).onMessage = (data: any, meta: any) => {
         const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
@@ -270,20 +340,12 @@ export function useLiveRoom({
     try {
       (room as any).onPeerJoin = (peerId: string) => {
         if (cancelled) return;
-        // manda perfil + streams + vídeo BETA para quem chegou (com retries)
-        [300, 1200, 2500].forEach((ms) => {
+        // manda perfil + streams + vídeo BETA na hora e com retries curtos
+        greetPeer(peerId, true);
+        [250, 900, 2000].forEach((ms) => {
           setTimeout(() => {
             if (cancelled) return;
-            broadcastProfile(peerId);
-            sendMediaTo(peerId);
-            localStreamsRef.current.forEach(({ stream, kind }) => {
-              try {
-                room.addStream(stream, {
-                  target: peerId,
-                  metadata: { kind, owner: profileRef.current.userName },
-                });
-              } catch {}
-            });
+            greetPeer(peerId);
           }, ms);
         });
         setConnectionStatus('connected');
@@ -428,11 +490,15 @@ export function useLiveRoom({
       };
     } catch {}
 
-    // anúncio inicial agressivo (importante pra mobile que entra depois)
-    [500, 1500, 3000, 5000].forEach((ms) => {
+    // anúncio inicial agressivo (o mais cedo possível = entra rápido na lista)
+    [120, 400, 800, 1500, 2500, 4000].forEach((ms) => {
       setTimeout(() => {
         if (!cancelled) {
           broadcastProfile();
+          try {
+            const peers = room.getPeers ? room.getPeers() : {};
+            Object.keys(peers || {}).forEach((pid) => greetPeer(pid));
+          } catch {}
           setConnectionStatus('connected');
         }
       }, ms);
@@ -440,11 +506,12 @@ export function useLiveRoom({
 
     const keepAlive = setInterval(() => {
       if (!cancelled) broadcastProfile();
-    }, 4000);
+    }, 2500);
 
     return () => {
       cancelled = true;
       clearInterval(keepAlive);
+      clearInterval(greetPoll);
       try {
         room.leave?.();
       } catch {}
