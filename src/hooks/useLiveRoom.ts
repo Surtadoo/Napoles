@@ -37,24 +37,40 @@ interface UseLiveRoomOptions {
 
 const APP_ID = 'livedc-call-v2-stable';
 
-// Relays rápidos e estáveis (menos = conecta mais rápido no celular)
+// Relays rápidos e estáveis — mais relays em paralelo = descoberta mais rápida
 const RELAY_URLS = [
-  'wss://relay.mostr.pub',
-  'wss://nos.lol',
   'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.mostr.pub',
+  'wss://relay.primal.net',
   'wss://nostr.wine',
+  'wss://relay.nostr.band',
   'wss://purplepag.es',
+  'wss://nostr.mom',
 ];
 
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
     {
-      urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'],
+      urls: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+        'stun:stun2.l.google.com:19302',
+        'stun:stun.cloudflare.com:3478',
+      ],
+    },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
       username: 'openrelayproject',
       credential: 'openrelayproject',
     },
   ],
+  // reúne candidatos ICE mais rápido
+  iceCandidatePoolSize: 4,
 };
 
 export function useLiveRoom({
@@ -77,13 +93,7 @@ export function useLiveRoom({
   const [sharedMedia, setSharedMedia] = useState<SharedMediaPayload | null>(null);
 
   const roomRef = useRef<any>(null);
-  const actionsRef = useRef<{
-    profile?: any;
-    chat?: any;
-    kick?: any;
-    media?: any;
-    hello?: any;
-  } | null>(null);
+  const actionsRef = useRef<{ profile?: any; chat?: any; kick?: any; media?: any } | null>(null);
   const localStreamsRef = useRef<Map<string, { stream: MediaStream; kind: string }>>(new Map());
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const roomCodeRef = useRef(roomCode);
@@ -148,8 +158,10 @@ export function useLiveRoom({
         {
           appId: APP_ID,
           password: `livedc-${roomCode}`,
-          relayConfig: { urls: RELAY_URLS, redundancy: 3 } as any,
+          // usa TODOS os relays em paralelo → anúncio chega em ~1-3s em vez de 10-30s
+          relayConfig: { urls: RELAY_URLS, redundancy: RELAY_URLS.length } as any,
           rtcConfig: RTC_CONFIG,
+          trickleIce: true,
         } as any,
         `livedc-room-${roomCode}`
       );
@@ -164,14 +176,7 @@ export function useLiveRoom({
     const chatAction = room.makeAction('livedc-chat-v3');
     const kickAction = room.makeAction('livedc-kick-v1');
     const mediaAction = room.makeAction('livedc-media-v2');
-    const helloAction = room.makeAction('livedc-hello-v1');
-    actionsRef.current = {
-      profile: profileAction,
-      chat: chatAction,
-      kick: kickAction,
-      media: mediaAction,
-      hello: helloAction,
-    };
+    actionsRef.current = { profile: profileAction, chat: chatAction, kick: kickAction, media: mediaAction };
 
     // recebo ordem de expulsão? só obedeço se o alvo for o meu selfId
     try {
@@ -231,63 +236,6 @@ export function useLiveRoom({
       }
     };
 
-    // ---- ENTRADA RÁPIDA: "olá" trocado assim que a conexão abre ----
-    const greeted = new Set<string>();
-
-    const pushLocalStreamsTo = (peerId: string) => {
-      localStreamsRef.current.forEach(({ stream, kind }) => {
-        try {
-          room.addStream(stream, {
-            target: peerId,
-            metadata: { kind, owner: profileRef.current.userName },
-          });
-        } catch {}
-      });
-    };
-
-    const greetPeer = (peerId: string, forceAsk = false) => {
-      if (!peerId || cancelled) return;
-      broadcastProfile(peerId);
-      sendMediaTo(peerId);
-      pushLocalStreamsTo(peerId);
-      if (!greeted.has(peerId) || forceAsk) {
-        greeted.add(peerId);
-        try {
-          helloAction.send({ ask: true, by: profileRef.current.userName }, { target: peerId } as any);
-        } catch {
-          try {
-            (helloAction as any).send({ ask: true, by: profileRef.current.userName }, peerId);
-          } catch {}
-        }
-      }
-    };
-
-    try {
-      (helloAction as any).onMessage = (_data: any, meta: any) => {
-        const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
-        if (!peerId || cancelled) return;
-        // alguém novo chegou: manda meu perfil + meu vídeo/BETA imediatamente
-        broadcastProfile(peerId);
-        sendMediaTo(peerId);
-        pushLocalStreamsTo(peerId);
-      };
-    } catch {}
-
-    // varre peers conectados a cada 700ms nos primeiros ~14s (entrada quase instantânea)
-    let greetTicks = 0;
-    const greetPoll = setInterval(() => {
-      if (cancelled) return;
-      greetTicks += 1;
-      try {
-        const peers = room.getPeers ? room.getPeers() : {};
-        const ids = Object.keys(peers || {});
-        ids.forEach((pid) => greetPeer(pid));
-        // para de varrer quando já cumprimentou todo mundo e passou o tempo
-        if (greetTicks > 20 && ids.length === 0) clearInterval(greetPoll);
-        if (greetTicks > 20 && greeted.size >= ids.length) clearInterval(greetPoll);
-      } catch {}
-    }, 700);
-
     try {
       (profileAction as any).onMessage = (data: any, meta: any) => {
         const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
@@ -340,36 +288,61 @@ export function useLiveRoom({
     try {
       (room as any).onPeerJoin = (peerId: string) => {
         if (cancelled) return;
-        // manda perfil + streams + vídeo BETA na hora e com retries curtos
-        greetPeer(peerId, true);
-        [250, 900, 2000].forEach((ms) => {
+        setConnectionStatus('connected');
+
+        // 1) coloca a pessoa na lista IMEDIATAMENTE (placeholder), o nome chega em seguida
+        setRemotePeers((prev) => {
+          if (prev[peerId]) return prev;
+          return {
+            ...prev,
+            [peerId]: {
+              peerId,
+              name: 'Conectando…',
+              avatar: '',
+              muted: true,
+              sharing: false,
+              cameraOn: false,
+              lastSeen: Date.now(),
+            },
+          };
+        });
+
+        // 2) manda meu perfil na hora (sem esperar) + retries rápidos, e streams/BETA
+        broadcastProfile(peerId);
+        [150, 500, 1200, 2500, 5000].forEach((ms) => {
           setTimeout(() => {
             if (cancelled) return;
-            greetPeer(peerId);
+            broadcastProfile(peerId);
+            sendMediaTo(peerId);
+            localStreamsRef.current.forEach(({ stream, kind }) => {
+              try {
+                room.addStream(stream, {
+                  target: peerId,
+                  metadata: { kind, owner: profileRef.current.userName },
+                });
+              } catch {}
+            });
           }, ms);
         });
-        setConnectionStatus('connected');
-        // tenta descobrir nome logo depois
-        setTimeout(() => {
-          if (cancelled) return;
-          const known = remotePeersRef.current[peerId];
-          const label = known?.name && known.name !== 'Convidado' ? known.name : 'Alguém';
-          if (!announced.has(peerId)) {
-            announced.add(peerId);
-            if (known && known.name !== 'Convidado') cbRef.current.onPeerJoinNotice(known.name);
-            else {
-              setTimeout(() => {
-                const later = remotePeersRef.current[peerId];
-                if (later && !announced.has(peerId + '-2')) {
-                  announced.add(peerId + '-2');
-                  cbRef.current.onPeerJoinNotice(later.name);
-                } else if (!later) {
-                  cbRef.current.onPeerJoinNotice(label);
-                }
-              }, 2500);
+
+        // 3) anuncia entrada assim que souber o nome (checa rápido, várias vezes)
+        if (!announced.has(peerId)) {
+          announced.add(peerId);
+          let tries = 0;
+          const tryAnnounce = () => {
+            if (cancelled) return;
+            const known = remotePeersRef.current[peerId];
+            const ready = known && known.name && known.name !== 'Conectando…' && known.name !== 'Convidado';
+            if (ready) {
+              cbRef.current.onPeerJoinNotice(known!.name);
+              return;
             }
-          }
-        }, 800);
+            tries += 1;
+            if (tries < 20) setTimeout(tryAnnounce, 300);
+            else if (known) cbRef.current.onPeerJoinNotice('Alguém');
+          };
+          setTimeout(tryAnnounce, 200);
+        }
       };
     } catch {}
 
@@ -490,28 +463,27 @@ export function useLiveRoom({
       };
     } catch {}
 
-    // anúncio inicial agressivo (o mais cedo possível = entra rápido na lista)
-    [120, 400, 800, 1500, 2500, 4000].forEach((ms) => {
+    // anúncio inicial agressivo (quem chegou avisa rápido quem já estava)
+    [100, 400, 900, 1800, 3000, 5000, 8000].forEach((ms) => {
       setTimeout(() => {
         if (!cancelled) {
           broadcastProfile();
-          try {
-            const peers = room.getPeers ? room.getPeers() : {};
-            Object.keys(peers || {}).forEach((pid) => greetPeer(pid));
-          } catch {}
           setConnectionStatus('connected');
         }
       }, ms);
     });
 
+    // keep-alive mais frequente nos primeiros 30s, depois relaxa
+    let ticks = 0;
     const keepAlive = setInterval(() => {
-      if (!cancelled) broadcastProfile();
-    }, 2500);
+      if (cancelled) return;
+      ticks += 1;
+      if (ticks <= 15 || ticks % 2 === 0) broadcastProfile();
+    }, 2000);
 
     return () => {
       cancelled = true;
       clearInterval(keepAlive);
-      clearInterval(greetPoll);
       try {
         room.leave?.();
       } catch {}

@@ -316,13 +316,13 @@ export function App() {
       list.push({
         id: p.peerId,
         name: p.name,
-        avatar: p.avatar || avatarForName(p.name),
+        avatar: p.avatar || avatarForName(p.name === 'Conectando…' ? p.peerId : p.name),
         isGuest: true,
         isMuted: p.muted,
         isSpeaking: !p.muted,
         isScreenSharing: p.sharing,
         isCameraOn: p.cameraOn,
-        tag: 'na call',
+        tag: p.name === 'Conectando…' ? 'entrando' : 'na call',
       });
     });
     return list;
@@ -458,22 +458,31 @@ export function App() {
       }
       const want4k = /4k|2160/i.test(streamQuality);
       const want1080 = /1080/i.test(streamQuality);
+      // cursor: 'never' = não captura o mouse (evita "vários cursores" ao ver a própria
+      // transmissão dentro da transmissão). Quem assiste vê a tela limpa.
+      const cursorOpt = { cursor: 'never' as const, displaySurface: 'monitor' as const };
       const mediaStream: MediaStream = await nav.mediaDevices.getDisplayMedia({
         video: want4k
           ? {
+              ...cursorOpt,
               width: { ideal: 3840, max: 3840 },
               height: { ideal: 2160, max: 2160 },
               frameRate: { ideal: 60, max: 60 },
             }
           : want1080
             ? {
+                ...cursorOpt,
                 width: { ideal: 1920, max: 1920 },
                 height: { ideal: 1080, max: 1080 },
                 frameRate: { ideal: 60, max: 60 },
               }
-            : { frameRate: { ideal: 30, max: 30 } },
+            : { ...cursorOpt, frameRate: { ideal: 30, max: 30 } },
         audio: true,
-      });
+        // evita capturar a própria aba (loop infinito de tela dentro de tela)
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
+        systemAudio: 'include',
+      } as any);
       const videoTrack = mediaStream.getVideoTracks()[0];
       // força a resolução máxima que o monitor permitir (4K de verdade)
       if (videoTrack) {
