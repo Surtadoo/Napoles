@@ -10,6 +10,8 @@ export interface RemotePeerProfile {
   sharing: boolean;
   cameraOn: boolean;
   lastSeen: number;
+  /** id estável da sessão (sobrevive a reconexão) — evita "duas pessoas com o mesmo nome" */
+  sessionId?: string;
 }
 
 export interface RemoteStreamInfo {
@@ -35,9 +37,9 @@ interface UseLiveRoomOptions {
   onMediaNotice?: (text: string) => void;
 }
 
-const APP_ID = 'livedc-call-v2-stable';
+const APP_ID = 'livedc-call-v3-fast';
 
-// Relays rápidos e estáveis — mais relays em paralelo = descoberta mais rápida
+// Relays em paralelo → descoberta rápida
 const RELAY_URLS = [
   'wss://relay.damus.io',
   'wss://nos.lol',
@@ -69,9 +71,73 @@ const RTC_CONFIG: RTCConfiguration = {
       credential: 'openrelayproject',
     },
   ],
-  // reúne candidatos ICE mais rápido
   iceCandidatePoolSize: 4,
 };
+
+// sessão estável por aba (não muda em reconexão) → dedup de peer
+function getSessionId(): string {
+  try {
+    const k = 'livedc-session-id';
+    let v = sessionStorage.getItem(k);
+    if (!v) {
+      v = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      sessionStorage.setItem(k, v);
+    }
+    return v;
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+const MY_SESSION_ID = getSessionId();
+
+/** Aplica bitrate/prioridade nos senders de vídeo de um RTCPeerConnection. */
+function tuneSendersOnPc(pc: any, opts: { maxBitrate: number; keepRes: boolean }) {
+  try {
+    const senders = pc?.getSenders ? pc.getSenders() : [];
+    (senders || []).forEach((sender: any) => {
+      try {
+        if (!sender?.track) return;
+        const params = sender.getParameters ? sender.getParameters() : {};
+        if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+        if (sender.track.kind === 'video') {
+          params.encodings = params.encodings.map((e: any) => ({
+            ...e,
+            maxBitrate: opts.maxBitrate,
+            scaleResolutionDownBy: 1,
+            networkPriority: 'high',
+            priority: 'high',
+          }));
+          try {
+            // 'maintain-framerate' = evita travar/engasgar (delay). Quem quer 4K nítido
+            // usa maintain-resolution, mas em 60fps o framerate é o que mata o atraso.
+            params.degradationPreference = opts.keepRes ? 'maintain-resolution' : 'maintain-framerate';
+          } catch {}
+        } else if (sender.track.kind === 'audio') {
+          params.encodings = params.encodings.map((e: any) => ({
+            ...e,
+            maxBitrate: 64000,
+            networkPriority: 'high',
+            priority: 'high',
+          }));
+        }
+        if (sender.setParameters) sender.setParameters(params).catch(() => {});
+      } catch {}
+    });
+  } catch {}
+}
+
+/** Reduz latência no receptor: buffer de jitter mínimo (playoutDelayHint). */
+function tuneReceiversOnPc(pc: any) {
+  try {
+    const receivers = pc?.getReceivers ? pc.getReceivers() : [];
+    (receivers || []).forEach((r: any) => {
+      try {
+        if ('playoutDelayHint' in r) r.playoutDelayHint = 0;
+        if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0;
+      } catch {}
+    });
+  } catch {}
+}
 
 export function useLiveRoom({
   roomCode,
@@ -93,9 +159,10 @@ export function useLiveRoom({
   const [sharedMedia, setSharedMedia] = useState<SharedMediaPayload | null>(null);
 
   const roomRef = useRef<any>(null);
-  const actionsRef = useRef<{ profile?: any; chat?: any; kick?: any; media?: any } | null>(null);
+  const actionsRef = useRef<{ profile?: any; chat?: any; kick?: any; media?: any; signal?: any } | null>(null);
   const localStreamsRef = useRef<Map<string, { stream: MediaStream; kind: string }>>(new Map());
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const qualityRef = useRef<string>('1080p 60fps');
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
@@ -119,9 +186,21 @@ export function useLiveRoom({
       muted: p.isMuted,
       sharing: p.isSharing,
       cameraOn: p.isCameraOn,
+      sid: MY_SESSION_ID,
       ts: Date.now(),
     };
   }, []);
+
+  const stopAudioFor = (key: string) => {
+    const a = audioElsRef.current.get(key);
+    if (a) {
+      try {
+        a.pause();
+        (a as any).srcObject = null;
+      } catch {}
+      audioElsRef.current.delete(key);
+    }
+  };
 
   const cleanupRoom = useCallback(() => {
     try {
@@ -158,7 +237,6 @@ export function useLiveRoom({
         {
           appId: APP_ID,
           password: `livedc-${roomCode}`,
-          // usa TODOS os relays em paralelo → anúncio chega em ~1-3s em vez de 10-30s
           relayConfig: { urls: RELAY_URLS, redundancy: RELAY_URLS.length } as any,
           rtcConfig: RTC_CONFIG,
           trickleIce: true,
@@ -172,25 +250,101 @@ export function useLiveRoom({
     }
     roomRef.current = room;
 
-    const profileAction = room.makeAction('livedc-profile-v3');
+    const profileAction = room.makeAction('livedc-profile-v4');
     const chatAction = room.makeAction('livedc-chat-v3');
     const kickAction = room.makeAction('livedc-kick-v1');
     const mediaAction = room.makeAction('livedc-media-v2');
-    actionsRef.current = { profile: profileAction, chat: chatAction, kick: kickAction, media: mediaAction };
+    // sinal explícito: "parei a tela/câmera" ou "saí da call" → some na hora pra todos
+    const signalAction = room.makeAction('livedc-signal-v1');
+    actionsRef.current = {
+      profile: profileAction,
+      chat: chatAction,
+      kick: kickAction,
+      media: mediaAction,
+      signal: signalAction,
+    };
 
-    // recebo ordem de expulsão? só obedeço se o alvo for o meu selfId
     try {
       (kickAction as any).onMessage = (data: any) => {
         if (cancelled || !data) return;
         try {
-          if (String(data.target || '') === String(selfId)) {
-            cbRef.current.onKicked?.();
-          }
+          if (String(data.target || '') === String(selfId)) cbRef.current.onKicked?.();
         } catch {}
       };
     } catch {}
 
-    // vídeo BETA compartilhado (YouTube/Twitch/Kick/arquivo)
+    try {
+      (signalAction as any).onMessage = (data: any, meta: any) => {
+        const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
+        if (!data || !peerId || cancelled) return;
+        const kind = String(data.kind || '');
+        if (kind === 'stop-stream') {
+          // remove imediatamente os vídeos desse tipo desse peer (sem esperar track.onended)
+          const which = String(data.streamKind || '');
+          setRemoteStreams((prev) => {
+            const gone = prev.filter(
+              (s) =>
+                s.peerId === peerId &&
+                (which === 'all' || which === '' || s.kind === which || s.kind === 'unknown')
+            );
+            gone.forEach((s) => {
+              try {
+                s.stream.getTracks().forEach((t) => t.stop());
+              } catch {}
+              stopAudioFor(s.key);
+            });
+            return prev.filter((s) => !gone.includes(s));
+          });
+          setRemotePeers((prev) => {
+            const p = prev[peerId];
+            if (!p) return prev;
+            return {
+              ...prev,
+              [peerId]: {
+                ...p,
+                sharing: which === 'camera' ? p.sharing : false,
+                cameraOn: which === 'screen' ? p.cameraOn : false,
+              },
+            };
+          });
+        } else if (kind === 'leave') {
+          // a pessoa saiu: tira da lista + fecha vídeos/áudio dela na hora
+          setRemotePeers((prev) => {
+            const next = { ...prev };
+            const left = next[peerId];
+            delete next[peerId];
+            if (left && left.name !== 'Conectando…') {
+              const sid = left.sessionId;
+              // também remove qualquer outro registro da mesma sessão
+              if (sid) {
+                Object.keys(next).forEach((pid) => {
+                  if (next[pid]?.sessionId === sid) delete next[pid];
+                });
+              }
+              cbRef.current.onPeerLeaveNotice(left.name);
+            }
+            return next;
+          });
+          setRemoteStreams((prev) => {
+            prev
+              .filter((s) => s.peerId === peerId)
+              .forEach((s) => {
+                try {
+                  s.stream.getTracks().forEach((t) => t.stop());
+                } catch {}
+                stopAudioFor(s.key);
+              });
+            return prev.filter((s) => s.peerId !== peerId);
+          });
+          // se quem saiu era o líder do vídeo BETA, encerra o vídeo
+          const cur = sharedMediaRef.current;
+          if (cur && cur.leaderId === peerId) {
+            setSharedMedia(null);
+          }
+        }
+      };
+    } catch {}
+
     try {
       (mediaAction as any).onMessage = (data: any, meta: any) => {
         const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
@@ -198,13 +352,14 @@ export function useLiveRoom({
         if (data.kind === 'set' && data.media) {
           const m = data.media as SharedMediaPayload;
           const cur = sharedMediaRef.current;
-          // se o vídeo atual é "só o líder controla" e quem mandou não é o líder, ignora
           if (cur && cur.controller === 'leader' && cur.leaderId !== peerId) return;
+          if (cur && cur.id === m.id) return; // já temos esse
           setSharedMedia(m);
           cbRef.current.onMediaNotice?.(`${m.leaderName} compartilhou: ${m.title}`);
         } else if (data.kind === 'clear') {
           const cur = sharedMediaRef.current;
           if (cur && cur.controller === 'leader' && cur.leaderId !== peerId) return;
+          if (!cur) return;
           setSharedMedia(null);
           cbRef.current.onMediaNotice?.(`${String(data.byName || 'Alguém')} encerrou o vídeo.`);
         }
@@ -229,21 +384,45 @@ export function useLiveRoom({
       if (!cur) return;
       try {
         mediaAction.send({ kind: 'set', media: cur }, { target } as any);
-      } catch {
-        try {
-          (mediaAction as any).send({ kind: 'set', media: cur }, target);
-        } catch {}
-      }
+      } catch {}
     };
+
+    // aplica tuning de latência em todas as conexões atuais
+    const tuneAll = () => {
+      try {
+        const peers = room.getPeers ? room.getPeers() : {};
+        const q = (qualityRef.current || '').toLowerCase();
+        const is4k = q.includes('4k') || q.includes('2160');
+        const is1080 = q.includes('1080');
+        const maxBitrate = is4k ? 12000000 : is1080 ? 5000000 : 2500000;
+        Object.values(peers || {}).forEach((pc: any) => {
+          tuneSendersOnPc(pc, { maxBitrate, keepRes: is4k });
+          tuneReceiversOnPc(pc);
+        });
+      } catch {}
+    };
+
+    // nomes já anunciados (por sessão, não por peerId → sem toast duplicado)
+    const announcedSessions = new Set<string>();
 
     try {
       (profileAction as any).onMessage = (data: any, meta: any) => {
         const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
         if (!peerId || cancelled || !data) return;
         const name = String(data?.name || 'Convidado').slice(0, 24);
-        setRemotePeers((prev) => ({
-          ...prev,
-          [peerId]: {
+        const sid = data?.sid ? String(data.sid) : undefined;
+
+        setRemotePeers((prev) => {
+          const next: Record<string, RemotePeerProfile> = { ...prev };
+          // DEDUP: se já existe outro peerId com a MESMA sessão, é reconexão → remove o antigo
+          if (sid) {
+            Object.keys(next).forEach((pid) => {
+              if (pid !== peerId && next[pid]?.sessionId === sid) {
+                delete next[pid];
+              }
+            });
+          }
+          next[peerId] = {
             peerId,
             name,
             avatar: String(data?.avatar || ''),
@@ -251,19 +430,22 @@ export function useLiveRoom({
             sharing: !!data?.sharing,
             cameraOn: !!data?.cameraOn,
             lastSeen: Date.now(),
-          },
-        }));
+            sessionId: sid,
+          };
+          return next;
+        });
         setRemoteStreams((prev) =>
           prev.map((s) => (s.peerId === peerId ? { ...s, ownerName: name } : s))
         );
-        setRemotePeers((prev) => {
-          return prev;
-        });
+
+        // anuncia entrada só 1x por sessão
+        const announceKey = sid || peerId;
+        if (!announcedSessions.has(announceKey) && name && name !== 'Convidado') {
+          announcedSessions.add(announceKey);
+          cbRef.current.onPeerJoinNotice(name);
+        }
       };
     } catch {}
-
-    // guarda nomes já anunciados para não repetir toast
-    const announced = new Set<string>();
 
     try {
       (chatAction as any).onMessage = (data: any, meta: any) => {
@@ -290,7 +472,7 @@ export function useLiveRoom({
         if (cancelled) return;
         setConnectionStatus('connected');
 
-        // 1) coloca a pessoa na lista IMEDIATAMENTE (placeholder), o nome chega em seguida
+        // placeholder imediato (nome chega em seguida)
         setRemotePeers((prev) => {
           if (prev[peerId]) return prev;
           return {
@@ -307,7 +489,7 @@ export function useLiveRoom({
           };
         });
 
-        // 2) manda meu perfil na hora (sem esperar) + retries rápidos, e streams/BETA
+        // manda perfil já + retries rápidos; streams e BETA
         broadcastProfile(peerId);
         [150, 500, 1200, 2500, 5000].forEach((ms) => {
           setTimeout(() => {
@@ -322,27 +504,19 @@ export function useLiveRoom({
                 });
               } catch {}
             });
+            tuneAll();
           }, ms);
         });
 
-        // 3) anuncia entrada assim que souber o nome (checa rápido, várias vezes)
-        if (!announced.has(peerId)) {
-          announced.add(peerId);
-          let tries = 0;
-          const tryAnnounce = () => {
-            if (cancelled) return;
-            const known = remotePeersRef.current[peerId];
-            const ready = known && known.name && known.name !== 'Conectando…' && known.name !== 'Convidado';
-            if (ready) {
-              cbRef.current.onPeerJoinNotice(known!.name);
-              return;
-            }
-            tries += 1;
-            if (tries < 20) setTimeout(tryAnnounce, 300);
-            else if (known) cbRef.current.onPeerJoinNotice('Alguém');
-          };
-          setTimeout(tryAnnounce, 200);
-        }
+        // se em 8s ainda não veio nome, marca como "Convidado" (não some, não duplica)
+        setTimeout(() => {
+          if (cancelled) return;
+          setRemotePeers((prev) => {
+            const p = prev[peerId];
+            if (!p || p.name !== 'Conectando…') return prev;
+            return { ...prev, [peerId]: { ...p, name: 'Convidado' } };
+          });
+        }, 8000);
       };
     } catch {}
 
@@ -353,25 +527,25 @@ export function useLiveRoom({
           const next = { ...prev };
           const left = next[peerId];
           delete next[peerId];
-          if (left) cbRef.current.onPeerLeaveNotice(left.name);
+          // só avisa saída se a sessão não continuar viva em outro peerId (reconexão)
+          if (left && left.name !== 'Conectando…') {
+            const stillAlive = left.sessionId
+              ? Object.values(next).some((p) => p.sessionId === left.sessionId)
+              : false;
+            if (!stillAlive) cbRef.current.onPeerLeaveNotice(left.name);
+          }
           return next;
         });
-        setRemoteStreams((prev) => prev.filter((s) => s.peerId !== peerId));
-        const audio = audioElsRef.current.get(peerId);
-        if (audio) {
-          try {
-            audio.pause();
-            audio.srcObject = null;
-          } catch {}
-          audioElsRef.current.delete(peerId);
-        }
+        setRemoteStreams((prev) => {
+          prev.filter((s) => s.peerId === peerId).forEach((s) => stopAudioFor(s.key));
+          return prev.filter((s) => s.peerId !== peerId);
+        });
       };
     } catch {}
 
     try {
       (room as any).onPeerStream = (stream: MediaStream, peerId: string, metadata: any) => {
         if (cancelled || !stream) return;
-        // ignora stream sem trilha de vídeo viva (evita tile cinza)
         const liveVideo = stream.getVideoTracks().filter((t) => t.readyState === 'live');
         const hasLiveVideo = liveVideo.length > 0;
         const hasAudio = stream.getAudioTracks().length > 0;
@@ -388,15 +562,26 @@ export function useLiveRoom({
           remotePeersRef.current[peerId]?.name ||
           'Convidado';
 
-        // áudio remoto: toca mesmo sem vídeo
+        // baixa latência no receptor
         try {
-          if (stream.getAudioTracks().length > 0 && !audioElsRef.current.has(key)) {
+          const peers = room.getPeers ? room.getPeers() : {};
+          const pc = peers?.[peerId];
+          if (pc) tuneReceiversOnPc(pc);
+          // 'contentHint' ajuda o decoder a priorizar fluidez
+          liveVideo.forEach((t) => {
+            try {
+              if ('contentHint' in t && !t.contentHint) (t as any).contentHint = kind === 'screen' ? 'detail' : 'motion';
+            } catch {}
+          });
+        } catch {}
+
+        try {
+          if (hasAudio && !audioElsRef.current.has(key)) {
             const audio = new Audio();
             audio.srcObject = stream;
             (audio as any).playsInline = true;
             audio.autoplay = true;
             audio.play().catch(() => {
-              // iOS exige gesto: tenta de novo no primeiro toque
               const retry = () => {
                 audio.play().catch(() => {});
                 window.removeEventListener('touchend', retry);
@@ -418,40 +603,22 @@ export function useLiveRoom({
             const alive = stream.getTracks().some((x) => x.readyState === 'live');
             if (!alive) {
               setRemoteStreams((p) => p.filter((s) => s.key !== key));
-              const a = audioElsRef.current.get(key);
-              if (a) {
-                try {
-                  a.pause();
-                } catch {}
-                audioElsRef.current.delete(key);
-              }
+              stopAudioFor(key);
             }
           };
         });
 
         setRemoteStreams((prev) => {
-          // agrupa por peer + tipo (evita tela duplicada do mesmo peer)
           const sameGroup = (a: string, b: string) => {
             if (a === 'mic' || b === 'mic') return a === b;
             if (a === 'unknown' || b === 'unknown') return true;
             return a === b;
           };
           const k = kind as string;
-          // remove duplicadas antigas do mesmo grupo (mantém só a mais nova)
-          const stale = prev.filter(
-            (s) => s.peerId === peerId && s.key !== key && sameGroup(s.kind as string, k)
-          );
-          stale.forEach((d) => {
-            const a = audioElsRef.current.get(d.key);
-            if (a) {
-              try {
-                a.pause();
-                (a as any).srcObject = null;
-              } catch {}
-              audioElsRef.current.delete(d.key);
-            }
-          });
-          let next = prev.filter(
+          prev
+            .filter((s) => s.peerId === peerId && s.key !== key && sameGroup(s.kind as string, k))
+            .forEach((d) => stopAudioFor(d.key));
+          const next = prev.filter(
             (s) => !(s.peerId === peerId && s.key !== key && sameGroup(s.kind as string, k))
           );
           if (next.some((s) => s.key === key)) {
@@ -463,7 +630,7 @@ export function useLiveRoom({
       };
     } catch {}
 
-    // anúncio inicial agressivo (quem chegou avisa rápido quem já estava)
+    // anúncio inicial agressivo
     [100, 400, 900, 1800, 3000, 5000, 8000].forEach((ms) => {
       setTimeout(() => {
         if (!cancelled) {
@@ -473,20 +640,43 @@ export function useLiveRoom({
       }, ms);
     });
 
-    // keep-alive mais frequente nos primeiros 30s, depois relaxa
+    // keep-alive + re-tuning periódico (segura o bitrate, evita degradar → delay)
     let ticks = 0;
     const keepAlive = setInterval(() => {
       if (cancelled) return;
       ticks += 1;
       if (ticks <= 15 || ticks % 2 === 0) broadcastProfile();
+      if (localStreamsRef.current.size > 0 && ticks % 3 === 0) tuneAll();
     }, 2000);
+
+    // fechou a aba / atualizou / trocou de página → avisa a sala antes de morrer
+    const sendLeaveSignal = () => {
+      try {
+        signalAction.send({ kind: 'leave', byName: profileRef.current.userName, ts: Date.now() });
+      } catch {}
+      try {
+        const cur = sharedMediaRef.current;
+        if (cur && cur.leaderId === selfId) {
+          mediaAction.send({ kind: 'clear', byName: profileRef.current.userName });
+        }
+      } catch {}
+    };
+    window.addEventListener('beforeunload', sendLeaveSignal);
+    window.addEventListener('pagehide', sendLeaveSignal);
 
     return () => {
       cancelled = true;
       clearInterval(keepAlive);
-      try {
-        room.leave?.();
-      } catch {}
+      window.removeEventListener('beforeunload', sendLeaveSignal);
+      window.removeEventListener('pagehide', sendLeaveSignal);
+      // saindo (troca de sala / desmontou) → avisa antes de fechar
+      sendLeaveSignal();
+      const r = room;
+      setTimeout(() => {
+        try {
+          r.leave?.();
+        } catch {}
+      }, 200);
       if (roomRef.current === room) {
         roomRef.current = null;
         actionsRef.current = null;
@@ -495,7 +685,6 @@ export function useLiveRoom({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, roomCode, userName]);
 
-  // reenvia perfil quando mudo/share/câmera muda
   useEffect(() => {
     if (!actionsRef.current?.profile || !enabled || !userName) return;
     const t = setTimeout(() => {
@@ -520,10 +709,38 @@ export function useLiveRoom({
     } catch {}
   }, []);
 
+  /** Aumenta o bitrate dos senders + baixa latência (usa a qualidade escolhida). */
+  const boostSenders = useCallback((qualityLabel?: string) => {
+    if (qualityLabel) qualityRef.current = qualityLabel;
+    const q = (qualityRef.current || '').toLowerCase();
+    const is4k = q.includes('4k') || q.includes('2160');
+    const is1080 = q.includes('1080');
+    const maxBitrate = is4k ? 12000000 : is1080 ? 5000000 : q.includes('720') ? 2500000 : 1500000;
+    try {
+      const room = roomRef.current;
+      const peers = room?.getPeers ? room.getPeers() : {};
+      Object.values(peers || {}).forEach((pc: any) => {
+        tuneSendersOnPc(pc, { maxBitrate, keepRes: is4k });
+        tuneReceiversOnPc(pc);
+      });
+    } catch {}
+  }, []);
+
   const publishStream = useCallback(
     (stream: MediaStream, kind: 'screen' | 'camera' | 'mic', key?: string) => {
       const mapKey = key || `${kind}-${stream.id}`;
       localStreamsRef.current.set(mapKey, { stream, kind });
+
+      // contentHint: tela = 'detail' (nitidez), câmera = 'motion' (fluidez)
+      try {
+        stream.getVideoTracks().forEach((t) => {
+          if ('contentHint' in t) (t as any).contentHint = kind === 'screen' ? 'detail' : 'motion';
+        });
+        stream.getAudioTracks().forEach((t) => {
+          if ('contentHint' in t) (t as any).contentHint = 'speech';
+        });
+      } catch {}
+
       const room = roomRef.current;
       if (!room) return;
       try {
@@ -532,119 +749,123 @@ export function useLiveRoom({
         });
         if (Array.isArray(r)) r.forEach((p: any) => (p as Promise<void>)?.catch?.(() => {}));
       } catch {}
-      // reforça bitrate alto logo após publicar (evita WebRTC derrubar p/ 1080p)
-      setTimeout(() => {
-        try {
-          const peers = room?.getPeers ? room.getPeers() : {};
-          Object.values(peers || {}).forEach((pc: any) => {
-            try {
-              const senders = pc?.getSenders ? pc.getSenders() : [];
-              (senders || []).forEach((sender: any) => {
-                try {
-                  if (!sender?.track || sender.track.kind !== 'video') return;
-                  const params = sender.getParameters ? sender.getParameters() : {};
-                  if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-                  params.encodings = params.encodings.map((e: any) => ({
-                    ...e,
-                    maxBitrate: 8000000,
-                    scaleResolutionDownBy: 1,
-                  }));
-                  try {
-                    params.degradationPreference = 'maintain-resolution';
-                  } catch {}
-                  if (sender.setParameters) sender.setParameters(params).catch(() => {});
-                } catch {}
-              });
-            } catch {}
-          });
-        } catch {}
-      }, 900);
+      // tuning logo após publicar + reforços (o WebRTC tenta baixar bitrate depois de segundos)
+      [600, 1500, 3000, 6000, 10000].forEach((ms) => {
+        setTimeout(() => {
+          try {
+            boostSenders();
+          } catch {}
+        }, ms);
+      });
     },
-    []
+    [boostSenders]
   );
 
   const unpublishStream = useCallback((stream: MediaStream, key?: string) => {
-    if (key) localStreamsRef.current.delete(key);
-    else {
+    let removedKind: string = 'all';
+    if (key) {
+      const entry = localStreamsRef.current.get(key);
+      if (entry) removedKind = entry.kind;
+      localStreamsRef.current.delete(key);
+    } else {
       for (const [k, v] of localStreamsRef.current.entries()) {
-        if (v.stream === stream) localStreamsRef.current.delete(k);
+        if (v.stream === stream) {
+          removedKind = v.kind;
+          localStreamsRef.current.delete(k);
+        }
       }
     }
     try {
       roomRef.current?.removeStream?.(stream);
     } catch {}
-  }, []);
-
-  /** Aumenta o bitrate dos senders de vídeo (4K/1080p real). */
-  const boostSenders = useCallback((qualityLabel?: string) => {
-    const q = (qualityLabel || '').toLowerCase();
-    const is4k = q.includes('4k') || q.includes('2160');
-    const is1080 = q.includes('1080');
-    const maxBitrate = is4k ? 12000000 : is1080 ? 5000000 : q.includes('720') ? 2500000 : 1500000;
-    const degradation = is4k || is1080 ? 'maintain-resolution' : ('balanced' as any);
+    // para as tracks (o onended dispara no remoto) + avisa explicitamente → some na hora
     try {
-      const room = roomRef.current;
-      const peers = room?.getPeers ? room.getPeers() : {};
-      Object.values(peers || {}).forEach((pc: any) => {
+      stream.getTracks().forEach((t) => {
         try {
-          const senders = pc?.getSenders ? pc.getSenders() : [];
-          (senders || []).forEach((sender: any) => {
-            try {
-              if (!sender?.track || sender.track.kind !== 'video') return;
-              const params = sender.getParameters ? sender.getParameters() : {};
-              if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-              params.encodings = params.encodings.map((e: any) => ({
-                ...e,
-                maxBitrate,
-                ...(is4k ? { scaleResolutionDownBy: 1 } : {}),
-              }));
-              try {
-                params.degradationPreference = degradation;
-              } catch {}
-              if (sender.setParameters) {
-                sender.setParameters(params).catch(() => {});
-              }
-            } catch {}
-          });
+          t.stop();
         } catch {}
+      });
+    } catch {}
+    try {
+      actionsRef.current?.signal?.send({
+        kind: 'stop-stream',
+        streamKind: removedKind,
+        ts: Date.now(),
       });
     } catch {}
   }, []);
 
-  // expulsa um peer da call (só o dono usa). Envia ordem + remove localmente.
-  const kickPeer = useCallback(
-    (targetPeerId: string, targetName: string) => {
+  /** Avisa todo mundo que saí (a lista e os vídeos somem na hora) e fecha tudo local. */
+  const leaveRoom = useCallback(() => {
+    // avisa a sala
+    try {
+      actionsRef.current?.signal?.send({
+        kind: 'leave',
+        byName: profileRef.current.userName,
+        ts: Date.now(),
+      });
+    } catch {}
+    // se eu era o líder do vídeo BETA, encerro pra todos
+    try {
+      const cur = sharedMediaRef.current;
+      if (cur && cur.leaderId === selfId) {
+        actionsRef.current?.media?.send({ kind: 'clear', byName: profileRef.current.userName });
+      }
+    } catch {}
+    // para e remove todas as minhas transmissões
+    try {
+      localStreamsRef.current.forEach(({ stream }) => {
+        try {
+          roomRef.current?.removeStream?.(stream);
+        } catch {}
+        try {
+          stream.getTracks().forEach((t) => t.stop());
+        } catch {}
+      });
+    } catch {}
+    localStreamsRef.current.clear();
+    // dá alguns ms pro sinal sair antes de fechar a conexão
+    const room = roomRef.current;
+    roomRef.current = null;
+    actionsRef.current = null;
+    setTimeout(() => {
       try {
-        actionsRef.current?.kick?.send({
-          target: targetPeerId,
-          by: profileRef.current.userName,
-          ts: Date.now(),
-        });
+        room?.leave?.();
       } catch {}
-      setRemotePeers((prev) => {
-        const next = { ...prev };
-        delete next[targetPeerId];
-        return next;
-      });
-      setRemoteStreams((prev) => prev.filter((s) => s.peerId !== targetPeerId));
-      const audioKeys = Array.from(audioElsRef.current.keys()).filter((k) =>
-        k.startsWith(targetPeerId)
-      );
-      audioKeys.forEach((k) => {
-        const a = audioElsRef.current.get(k);
-        if (a) {
-          try {
-            a.pause();
-          } catch {}
-          audioElsRef.current.delete(k);
-        }
-      });
-      return targetName;
-    },
-    []
-  );
+    }, 250);
+    audioElsRef.current.forEach((a) => {
+      try {
+        a.pause();
+        a.srcObject = null;
+      } catch {}
+    });
+    audioElsRef.current.clear();
+    setRemotePeers({});
+    setRemoteStreams([]);
+    setSharedMedia(null);
+    setConnectionStatus('idle');
+  }, []);
 
-  /** Compartilha um vídeo BETA com toda a sala (YouTube/Twitch/Kick/arquivo). */
+  const kickPeer = useCallback((targetPeerId: string, targetName: string) => {
+    try {
+      actionsRef.current?.kick?.send({
+        target: targetPeerId,
+        by: profileRef.current.userName,
+        ts: Date.now(),
+      });
+    } catch {}
+    setRemotePeers((prev) => {
+      const next = { ...prev };
+      delete next[targetPeerId];
+      return next;
+    });
+    setRemoteStreams((prev) => {
+      prev.filter((s) => s.peerId === targetPeerId).forEach((s) => stopAudioFor(s.key));
+      return prev.filter((s) => s.peerId !== targetPeerId);
+    });
+    return targetName;
+  }, []);
+
   const broadcastMedia = useCallback((media: SharedMediaPayload) => {
     setSharedMedia(media);
     try {
@@ -652,7 +873,6 @@ export function useLiveRoom({
     } catch {}
   }, []);
 
-  /** Encerra o vídeo BETA para toda a sala. */
   const clearMedia = useCallback((byName: string) => {
     setSharedMedia(null);
     try {
@@ -660,16 +880,32 @@ export function useLiveRoom({
     } catch {}
   }, []);
 
+  // lista deduplicada por sessão (garantia extra contra "mesmo nome 2x")
+  const remotePeersList = (() => {
+    const bySession = new Map<string, RemotePeerProfile>();
+    const noSession: RemotePeerProfile[] = [];
+    Object.values(remotePeers).forEach((p) => {
+      if (!p.sessionId) {
+        noSession.push(p);
+        return;
+      }
+      const cur = bySession.get(p.sessionId);
+      if (!cur || p.lastSeen > cur.lastSeen) bySession.set(p.sessionId, p);
+    });
+    return [...bySession.values(), ...noSession];
+  })();
+
   return {
     remotePeers,
     remoteStreams,
-    remotePeersList: Object.values(remotePeers),
+    remotePeersList,
     connectionStatus,
-    peerCount: Object.keys(remotePeers).length,
+    peerCount: remotePeersList.length,
     sendChat,
     publishStream,
     unpublishStream,
     cleanupRoom,
+    leaveRoom,
     kickPeer,
     boostSenders,
     myPeerId: selfId as string,

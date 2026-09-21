@@ -36,6 +36,8 @@ export function App() {
     const fromUrl = getRoomCodeFromUrl();
     return fromUrl || generateRoomCode();
   });
+  // true quando a pessoa entrou numa sala existente (link OU código digitado) → não é dona
+  const [joinedExisting, setJoinedExisting] = useState<boolean>(() => !!getRoomCodeFromUrl());
   const [roomName] = useState('Time_do_Sky');
   const [isPrivate] = useState(true);
 
@@ -57,7 +59,8 @@ export function App() {
 
   const [isMuted, setIsMuted] = useState(true);
   const [isDeafened, setIsDeafened] = useState(false);
-  const [streamQuality, setStreamQuality] = useState('1080p 60fps');
+  // 30fps padrão = sem delay; 60fps é opcional nas configurações
+  const [streamQuality, setStreamQuality] = useState('1080p 30fps');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
 
@@ -65,7 +68,7 @@ export function App() {
     type: 'none',
     stream: null,
     title: 'Ninguém está transmitindo ainda.',
-    quality: '1080p 60fps',
+    quality: '1080p 30fps',
     isSharing: false,
     isPaused: false,
   });
@@ -304,7 +307,7 @@ export function App() {
         id: 'current-user',
         name: currentUserName,
         avatar: userAvatar,
-        isOwner: !initialInviteCode,
+        isOwner: !joinedExisting,
         isMuted,
         isSpeaking: !isMuted,
         isScreenSharing: profileSharing,
@@ -326,7 +329,7 @@ export function App() {
       });
     });
     return list;
-  }, [currentUserName, userAvatar, isMuted, profileSharing, isCameraActive, remotePeersList, initialInviteCode]);
+  }, [currentUserName, userAvatar, isMuted, profileSharing, isCameraActive, remotePeersList, joinedExisting]);
 
   // troca de código: gera novo, atualiza URL, limpa sala e reentra
   const handleRegenerateCode = useCallback(() => {
@@ -414,18 +417,35 @@ export function App() {
     showToast(next ? 'Som da sala silenciado para você.' : 'Som da sala ativado.');
   };
 
-  const handleUserJoin = (userName: string) => {
+  const handleUserJoin = (userName: string, chosenCode: string) => {
+    // código digitado tem prioridade: entra na sala daquele código
+    // (mesmo que seja diferente do link). Vazio = cria sala nova.
+    const finalCode = chosenCode && chosenCode.trim() ? chosenCode.trim() : roomCode;
+    const enteredExisting = !!chosenCode && chosenCode.trim() !== '';
+
+    if (finalCode !== roomCode) {
+      setRoomCode(finalCode);
+    }
+    setJoinedExisting(enteredExisting || !!initialInviteCode);
     setCurrentUserName(userName);
     setIsNameModalOpen(false);
+
+    const cameFromLink = !!initialInviteCode && finalCode === initialInviteCode;
+    const switchedRoom = !!initialInviteCode && finalCode !== initialInviteCode;
+
     setTimeout(() => {
       addSystemMessage(
-        initialInviteCode
-          ? `${userName} entrou na call ${roomCode} pelo link.`
-          : `${userName} criou a sala ${roomCode}. Copie o link para chamar amigos.`
+        switchedRoom
+          ? `${userName} entrou na call ${finalCode} pelo código (diferente do link).`
+          : cameFromLink
+            ? `${userName} entrou na call ${finalCode} pelo link.`
+            : enteredExisting
+              ? `${userName} entrou na call ${finalCode} pelo código.`
+              : `${userName} criou a sala ${finalCode}. Copie o link para chamar amigos.`
       );
       showToast(
-        initialInviteCode
-          ? `Bem-vindo à call, ${userName}!`
+        enteredExisting || cameFromLink
+          ? `Bem-vindo à call ${finalCode}, ${userName}!`
           : `Bem-vindo, ${userName}! Toque em Convidar para chamar.`
       );
     }, 300);
@@ -458,6 +478,10 @@ export function App() {
       }
       const want4k = /4k|2160/i.test(streamQuality);
       const want1080 = /1080/i.test(streamQuality);
+      const want60 = /60/.test(streamQuality);
+      // 30fps em 4K/1080p reduz MUITO o delay (o encoder não aguenta 60fps em alta
+      // resolução e começa a atrasar depois de alguns segundos). Quem quer 60 escolhe.
+      const fps = want60 ? { ideal: 60, max: 60 } : { ideal: 30, max: 30 };
       // cursor: 'never' = não captura o mouse (evita "vários cursores" ao ver a própria
       // transmissão dentro da transmissão). Quem assiste vê a tela limpa.
       const cursorOpt = { cursor: 'never' as const, displaySurface: 'monitor' as const };
@@ -467,33 +491,44 @@ export function App() {
               ...cursorOpt,
               width: { ideal: 3840, max: 3840 },
               height: { ideal: 2160, max: 2160 },
-              frameRate: { ideal: 60, max: 60 },
+              frameRate: fps,
             }
           : want1080
             ? {
                 ...cursorOpt,
                 width: { ideal: 1920, max: 1920 },
                 height: { ideal: 1080, max: 1080 },
-                frameRate: { ideal: 60, max: 60 },
+                frameRate: fps,
               }
-            : { ...cursorOpt, frameRate: { ideal: 30, max: 30 } },
-        audio: true,
+            : { ...cursorOpt, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          // áudio do sistema sem processamento = menos atraso
+          sampleRate: 48000,
+        },
         // evita capturar a própria aba (loop infinito de tela dentro de tela)
         selfBrowserSurface: 'exclude',
         surfaceSwitching: 'include',
         systemAudio: 'include',
+        preferCurrentTab: false,
       } as any);
       const videoTrack = mediaStream.getVideoTracks()[0];
-      // força a resolução máxima que o monitor permitir (4K de verdade)
       if (videoTrack) {
         videoTrack.onended = () => handleStopSharing();
+        // 'detail' = prioriza nitidez de texto/tela; o encoder mantém resolução
+        try {
+          if ('contentHint' in videoTrack) (videoTrack as any).contentHint = 'detail';
+        } catch {}
+        // força a resolução máxima que o monitor permitir (4K de verdade)
         try {
           if (want4k) {
             await videoTrack
               .applyConstraints({
                 width: { ideal: 3840 },
                 height: { ideal: 2160 },
-                frameRate: { ideal: 60 },
+                frameRate: fps,
               } as any)
               .catch(() => {});
           }
@@ -508,21 +543,11 @@ export function App() {
         isSharing: true,
         isPaused: false,
       });
+      // registra a qualidade antes de publicar (o hook usa no tuning dos senders)
+      try {
+        liveRoom.boostSenders(streamQuality);
+      } catch {}
       liveRoom.publishStream(mediaStream, 'screen', 'screen-local');
-      // bitrate alto p/ manter a qualidade escolhida (senão o WebRTC derruba p/ 1080p)
-      setTimeout(() => {
-        try {
-          liveRoom.boostSenders(streamQuality);
-        } catch {}
-        try {
-          liveRoom.boostSenders(streamQuality);
-        } catch {}
-      }, 1200);
-      setTimeout(() => {
-        try {
-          liveRoom.boostSenders(streamQuality);
-        } catch {}
-      }, 3500);
       const track = mediaStream.getVideoTracks()[0];
       const set = track?.getSettings?.();
       const realRes = set?.width && set?.height ? ` (${set.width}×${set.height})` : '';
@@ -640,13 +665,15 @@ export function App() {
 
   const handleStopSharing = () => {
     if (streamState.stream) {
+      // despublica (isso já para as tracks + avisa a sala → some na hora pra todos)
       try {
-        liveRoom.unpublishStream(streamState.stream, 'screen-local');
+        const key = streamState.type === 'camera' ? 'camera-local' : 'screen-local';
+        liveRoom.unpublishStream(streamState.stream, key);
       } catch {}
-      if (streamState.type === 'camera' && cameraStream) {
-        try {
-          liveRoom.unpublishStream(cameraStream, 'camera-local');
-        } catch {}
+      if (streamState.type === 'camera') {
+        // a câmera era a transmissão principal → desliga o estado da câmera também
+        setCameraStream(null);
+        setIsCameraActive(false);
       }
       try {
         streamState.stream.getTracks().forEach((t) => t.stop());
@@ -663,6 +690,34 @@ export function App() {
       isPaused: false,
     });
     addSystemMessage('A transmissão foi encerrada.');
+  };
+
+  /** Sai da call de verdade: fecha tela/câmera/mic, avisa a sala e volta ao início. */
+  const handleLeaveCall = () => {
+    try {
+      if (isRecording) handleStopRecording();
+    } catch {}
+    // para minhas mídias locais
+    try {
+      streamState.stream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      cameraStream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      if (localBetaFileUrl) URL.revokeObjectURL(localBetaFileUrl);
+    } catch {}
+    // avisa todo mundo que saí (nome some da lista + transmissão fecha nos outros)
+    try {
+      liveRoom.leaveRoom();
+    } catch {}
+    // dá tempo do sinal sair antes de recarregar
+    setTimeout(() => {
+      window.location.href = window.location.pathname;
+    }, 350);
   };
 
   const handleStartRecording = () => {
@@ -766,8 +821,7 @@ export function App() {
         onOpenMusic={() => setIsMusicModalOpen(true)}
         onDisconnect={() => {
           if (confirm('Sair da call?')) {
-            handleStopSharing();
-            window.location.href = window.location.pathname;
+            handleLeaveCall();
           }
         }}
         onShareRoom={() => setIsShareModalOpen(true)}
@@ -789,7 +843,7 @@ export function App() {
             userPoints={userPoints}
             connectionStatus={connectionStatus}
             shareUrl={shareUrl}
-            isOwner={!initialInviteCode && !!currentUserName}
+            isOwner={!joinedExisting && !!currentUserName}
             onKickParticipant={handleKickParticipant}
           />
         </div>

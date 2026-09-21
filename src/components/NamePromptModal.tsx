@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { User, Sparkles, ArrowRight, Lock, Link2 } from 'lucide-react';
+import { User, Sparkles, ArrowRight, Lock, Link2, KeyRound } from 'lucide-react';
 
 interface NamePromptModalProps {
   isOpen: boolean;
-  onJoin: (userName: string) => void;
+  /** userName + código da sala escolhido (pode ser diferente do link) */
+  onJoin: (userName: string, roomCode: string) => void;
   invitedRoomCode: string | null;
 }
 
@@ -14,13 +15,14 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
+  const [useOtherCode, setUseOtherCode] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (isOpen && invitedRoomCode) {
-      // pré-preenche o código do link para entrar com 1 clique,
-      // mas a pessoa pode apagar e digitar — validação exige código certo
-      setCode(invitedRoomCode);
+    if (isOpen) {
+      setCode(invitedRoomCode || '');
+      setUseOtherCode(false);
+      setError('');
     }
   }, [isOpen, invitedRoomCode]);
 
@@ -37,19 +39,32 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
       setError('O nome deve ter no máximo 20 caracteres.');
       return;
     }
-    if (invitedRoomCode) {
-      const cleanCode = code.trim();
+
+    const cleanCode = code.trim();
+
+    // Veio por link OU quer entrar em outra sala pelo código
+    if (invitedRoomCode || useOtherCode) {
       if (!cleanCode) {
-        setError('Digite o código de acesso da sala (foi enviado junto com o link).');
+        setError('Digite o código da sala (6 dígitos).');
         return;
       }
-      if (cleanCode !== invitedRoomCode) {
-        setError(`Código incorreto. O código desta sala é enviado junto com o link. Confira e tente de novo.`);
+      if (!/^\d{4,10}$/.test(cleanCode)) {
+        setError('Código inválido. Use só números (ex: 489059).');
         return;
       }
+      // qualquer código válido entra na sala daquele código —
+      // igual ao do link entra na sala do link; diferente entra na outra sala
+      onJoin(cleanName, cleanCode);
+      return;
     }
-    onJoin(cleanName);
+
+    // criando sala nova (sem link, sem código)
+    onJoin(cleanName, '');
   };
+
+  const showCodeField = !!invitedRoomCode || useOtherCode;
+  const isDifferentFromLink =
+    !!invitedRoomCode && code.trim() !== '' && code.trim() !== invitedRoomCode;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
@@ -67,11 +82,11 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
               <>
                 Entre na call para conversar por voz, vídeo e chat em tempo real.
                 <span className="block mt-1.5 text-emerald-300 font-mono text-[13px]">
-                  Sala: {invitedRoomCode}
+                  Sala do link: {invitedRoomCode}
                 </span>
               </>
             ) : (
-              'Crie sua sala privada para transmitir tela, áudio e conversar em tempo real.'
+              'Crie sua sala privada ou entre em uma sala existente pelo código.'
             )}
           </p>
         </div>
@@ -96,11 +111,11 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
             />
           </div>
 
-          {invitedRoomCode && (
+          {showCodeField && (
             <div>
               <label className="text-xs font-semibold text-gray-300 mb-1.5 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-yellow-400" />
-                Código de acesso da sala
+                Código da sala
               </label>
               <input
                 type="text"
@@ -113,13 +128,41 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
                   setCode(e.target.value.replace(/\D/g, '').slice(0, 10));
                   setError('');
                 }}
-                className="w-full bg-[#0d1017] border border-yellow-500/40 focus:border-yellow-400 text-sm rounded-xl px-4 py-3 text-yellow-200 font-mono tracking-widest text-center text-base outline-none transition-all"
+                className={`w-full bg-[#0d1017] border text-sm rounded-xl px-4 py-3 font-mono tracking-widest text-center text-base outline-none transition-all ${
+                  isDifferentFromLink
+                    ? 'border-sky-400 text-sky-200'
+                    : 'border-yellow-500/40 focus:border-yellow-400 text-yellow-200'
+                }`}
               />
-              <p className="text-[11px] text-gray-500 mt-1.5 flex items-center gap-1">
-                <Link2 className="w-3 h-3" />
-                O código vai junto com o link que te mandaram.
-              </p>
+              {isDifferentFromLink ? (
+                <p className="text-[11px] text-sky-300 mt-1.5 flex items-center gap-1">
+                  <KeyRound className="w-3 h-3" />
+                  Você vai entrar na sala <b className="font-mono">{code.trim()}</b> (diferente do
+                  link).
+                </p>
+              ) : (
+                <p className="text-[11px] text-gray-500 mt-1.5 flex items-center gap-1">
+                  <Link2 className="w-3 h-3" />
+                  {invitedRoomCode
+                    ? 'Já veio preenchido do link. Pode trocar por outro código pra entrar em outra sala.'
+                    : 'Peça o código para quem criou a sala.'}
+                </p>
+              )}
             </div>
+          )}
+
+          {!invitedRoomCode && (
+            <button
+              type="button"
+              onClick={() => {
+                setUseOtherCode((v) => !v);
+                setError('');
+                if (useOtherCode) setCode('');
+              }}
+              className="w-full text-[11px] text-emerald-300 hover:text-emerald-200 underline underline-offset-2 text-left"
+            >
+              {useOtherCode ? '← Voltar e criar uma sala nova' : 'Tenho um código de sala → entrar com código'}
+            </button>
           )}
 
           {error && (
@@ -132,7 +175,13 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
             type="submit"
             className="w-full py-3 rounded-xl bg-[#10b981] hover:bg-[#059669] active:bg-[#047857] text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg touch-manipulation"
           >
-            <span>{invitedRoomCode ? 'Entrar na call agora' : 'Entrar na Sala LiveDC'}</span>
+            <span>
+              {showCodeField
+                ? isDifferentFromLink
+                  ? `Entrar na sala ${code.trim()}`
+                  : 'Entrar na call agora'
+                : 'Criar sala LiveDC'}
+            </span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
