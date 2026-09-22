@@ -262,10 +262,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </p>
 
               {[
-                { name: '2160p 4K 30fps', desc: 'Ultra HD 3840×2160 em 30fps — nítido e SEM delay (recomendado p/ 4K)', badge: '4K ULTRA' },
-                { name: '2160p 4K 60fps', desc: 'Ultra HD 60fps — só com internet e PC muito fortes (pode dar delay)' },
-                { name: '1080p 30fps', desc: 'Full HD fluido e sem atraso — melhor para a maioria', badge: 'RECOMENDADO' },
-                { name: '1080p 60fps', desc: 'Full HD 60fps — ideal para jogos rápidos (usa mais internet)' },
+                { name: '2160p 4K 60fps', desc: 'Ultra HD 3840×2160 — máxima nitidez (exige boa internet)', badge: '4K ULTRA' },
+                { name: '1080p 60fps', desc: 'Full HD — ideal para jogos rápidos', badge: 'RECOMENDADO' },
                 { name: '720p 60fps', desc: 'Equilíbrio ideal entre fluidez e velocidade de upload' },
                 { name: '720p 30fps', desc: 'Economia de banda e conexões lentas' },
               ].map((opt) => (
