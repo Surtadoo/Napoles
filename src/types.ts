@@ -3,6 +3,7 @@ export interface Participant {
   name: string;
   avatar: string;
   isOwner?: boolean;
+  isAdmin?: boolean;
   isGuest?: boolean;
   isMuted: boolean;
   isSpeaking: boolean;

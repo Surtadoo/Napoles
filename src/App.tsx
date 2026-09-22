@@ -30,20 +30,19 @@ export function App() {
     initAntiInspectionAndProtection();
   }, []);
 
-  // Detecta se abriu por link de convite (tem ?room= na URL inicial)
+  // Detecta se abriu por link de convite (tem ?room= na URL inicial) — lido UMA vez, na carga
   const [initialInviteCode] = useState<string | null>(() => getRoomCodeFromUrl());
 
-  const [roomCode, setRoomCode] = useState<string>(() => {
-    const fromUrl = getRoomCodeFromUrl();
-    return fromUrl || generateRoomCode();
-  });
+  // roomCode só é DEFINIDO quando a pessoa confirma o nome (evita conectar em sala errada).
+  // '' = ainda não entrou.
+  const [roomCode, setRoomCode] = useState<string>('');
   // true quando a pessoa entrou numa sala existente (link OU código digitado) → não é dona
-  const [joinedExisting, setJoinedExisting] = useState<boolean>(() => !!getRoomCodeFromUrl());
+  const [joinedExisting, setJoinedExisting] = useState<boolean>(false);
   const [roomName] = useState('Time_do_Sky');
   const [isPrivate] = useState(true);
 
   useEffect(() => {
-    persistRoomCodeInUrl(roomCode);
+    if (roomCode) persistRoomCodeInUrl(roomCode);
   }, [roomCode]);
 
   const shareUrl = useMemo(() => buildShareUrl(roomCode), [roomCode]);
@@ -179,7 +178,7 @@ export function App() {
     roomCode,
     userName: currentUserName,
     userAvatar,
-    enabled: !!currentUserName && !wasKicked,
+    enabled: !!currentUserName && !!roomCode && !wasKicked,
     isMuted,
     isSharing: profileSharing,
     isCameraOn: isCameraActive,
@@ -344,34 +343,61 @@ export function App() {
 
   const participants: Participant[] = useMemo(() => {
     const list: Participant[] = [];
+    const admins = roomSettings.admins || [];
+    const ownerSid = roomSettings.ownerSessionId;
     if (currentUserName) {
+      const meAdmin = admins.includes(liveRoom.mySessionId);
       list.push({
         id: 'current-user',
         name: currentUserName,
         avatar: userAvatar,
         isOwner: !joinedExisting,
+        isAdmin: meAdmin,
         isMuted,
         isSpeaking: !isMuted,
         isScreenSharing: profileSharing,
         isCameraOn: isCameraActive,
-        tag: 'você',
+        tag: meAdmin && joinedExisting ? 'você • admin' : 'você',
       });
     }
     remotePeersList.forEach((p) => {
+      const isRemoteOwner = !!p.sessionId && !!ownerSid && p.sessionId === ownerSid;
+      const isRemoteAdmin = !!p.sessionId && admins.includes(p.sessionId);
       list.push({
         id: p.peerId,
         name: p.name,
         avatar: p.avatar || avatarForName(p.name === 'Conectando…' ? p.peerId : p.name),
         isGuest: true,
+        isOwner: isRemoteOwner,
+        isAdmin: isRemoteAdmin,
         isMuted: p.muted,
         isSpeaking: !p.muted,
         isScreenSharing: p.sharing,
         isCameraOn: p.cameraOn,
-        tag: p.name === 'Conectando…' ? 'entrando' : 'na call',
+        tag:
+          p.name === 'Conectando…'
+            ? 'entrando'
+            : isRemoteOwner
+              ? 'dono'
+              : isRemoteAdmin
+                ? 'admin'
+                : 'na call',
       });
     });
     return list;
-  }, [currentUserName, userAvatar, isMuted, profileSharing, isCameraActive, remotePeersList, joinedExisting]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentUserName,
+    userAvatar,
+    isMuted,
+    profileSharing,
+    isCameraActive,
+    remotePeersList,
+    joinedExisting,
+    roomSettings.admins,
+    roomSettings.ownerSessionId,
+    liveRoom.mySessionId,
+  ]);
 
   // troca de código: gera novo, atualiza URL, limpa sala e reentra
   const handleRegenerateCode = useCallback(() => {
@@ -464,14 +490,13 @@ export function App() {
   };
 
   const handleUserJoin = (userName: string, chosenCode: string) => {
-    // código digitado tem prioridade: entra na sala daquele código
-    // (mesmo que seja diferente do link). Vazio = cria sala nova.
-    const finalCode = chosenCode && chosenCode.trim() ? chosenCode.trim() : roomCode;
-    const enteredExisting = !!chosenCode && chosenCode.trim() !== '';
+    // Regra: código digitado > código do link > sala nova.
+    // O roomCode só é definido AQUI, então o hook conecta direto na sala certa.
+    const typed = (chosenCode || '').trim();
+    const enteredExisting = typed !== '';
+    const finalCode = typed || initialInviteCode || generateRoomCode();
 
-    if (finalCode !== roomCode) {
-      setRoomCode(finalCode);
-    }
+    setRoomCode(finalCode);
     setJoinedExisting(enteredExisting || !!initialInviteCode);
     setCurrentUserName(userName);
     setIsNameModalOpen(false);

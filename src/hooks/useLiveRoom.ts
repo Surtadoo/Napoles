@@ -181,6 +181,7 @@ export function useLiveRoom({
   roomSettingsRef.current = roomSettings;
   const isOwnerRef = useRef(isOwner);
   isOwnerRef.current = isOwner;
+  const broadcastSettingsRef = useRef<((target?: string) => void) | null>(null);
 
   const roomRef = useRef<any>(null);
   const actionsRef = useRef<{
@@ -316,11 +317,26 @@ export function useLiveRoom({
 
     // se sou o dono, garanto que as configs têm meu id/nome
     if (isOwnerRef.current) {
-      setRoomSettings((prev) => ({
-        ...prev,
+      const fixed: RoomSettings = {
+        ...roomSettingsRef.current,
         ownerSessionId: MY_SESSION_ID,
         ownerName: profileRef.current.userName,
-      }));
+      };
+      roomSettingsRef.current = fixed;
+      setRoomSettings(fixed);
+    } else {
+      // convidado: zera pra receber as configs do dono desta sala
+      const fresh: RoomSettings = {
+        permissions: { ...DEFAULT_PERMISSIONS },
+        admins: [],
+        banned: [],
+        maxParticipants: 0,
+        ownerSessionId: '',
+        ownerName: '',
+        version: 0,
+      };
+      roomSettingsRef.current = fresh;
+      setRoomSettings(fresh);
     }
 
     const broadcastSettings = (target?: string) => {
@@ -332,18 +348,23 @@ export function useLiveRoom({
         else settingsAction.send(payload as any);
       } catch {}
     };
+    // deixa acessível pras funções de gerência (pushSettings) reenviarem via este canal
+    broadcastSettingsRef.current = broadcastSettings;
 
     try {
       (settingsAction as any).onMessage = (data: any, meta: any) => {
         const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
         if (!data || cancelled || !peerId) return;
-        // só aceito configs de quem se declara dono e é o dono conhecido (ou ainda não conheço dono)
         const incoming = data as RoomSettings;
         const cur = roomSettingsRef.current;
         if (isOwnerRef.current) return; // dono não aceita configs de ninguém
-        if (cur.ownerSessionId && incoming.ownerSessionId !== cur.ownerSessionId) return;
-        if (typeof incoming.version === 'number' && incoming.version < cur.version) return;
-        setRoomSettings({
+        // aceita do dono conhecido; se ainda não conheço dono, aceita o primeiro que se declarar
+        if (cur.ownerSessionId && incoming.ownerSessionId && incoming.ownerSessionId !== cur.ownerSessionId) {
+          return;
+        }
+        // versão igual ou maior sempre aplica (igual = reenvio/garantia)
+        if (typeof incoming.version === 'number' && incoming.version < (cur.version || 0)) return;
+        const next: RoomSettings = {
           permissions: { ...DEFAULT_PERMISSIONS, ...(incoming.permissions || {}) },
           admins: Array.isArray(incoming.admins) ? incoming.admins : [],
           banned: Array.isArray(incoming.banned) ? incoming.banned : [],
@@ -351,7 +372,9 @@ export function useLiveRoom({
           ownerSessionId: String(incoming.ownerSessionId || ''),
           ownerName: String(incoming.ownerName || ''),
           version: Number(incoming.version || 0),
-        });
+        };
+        roomSettingsRef.current = next;
+        setRoomSettings(next);
         // fui banido? saio na hora
         const banned = (incoming.banned || []).some((b) => b.sessionId === MY_SESSION_ID);
         if (banned) cbRef.current.onBanned?.();
@@ -792,6 +815,8 @@ export function useLiveRoom({
       ticks += 1;
       if (ticks <= 15 || ticks % 2 === 0) broadcastProfile();
       if (localStreamsRef.current.size > 0 && ticks % 3 === 0) tuneAll();
+      // dono reenvia as configs (admins/permissões/bans) a cada 6s → todos sempre em dia
+      if (isOwnerRef.current && ticks % 3 === 0) broadcastSettings();
     }, 2000);
 
     // fechou a aba / atualizou / trocou de página → avisa a sala antes de morrer
@@ -1031,17 +1056,15 @@ export function useLiveRoom({
     };
     roomSettingsRef.current = bumped;
     setRoomSettings(bumped);
-    try {
-      actionsRef.current?.settings?.send(bumped as any);
-    } catch {}
-    // reenvia (garante que chegue)
-    [400, 1500].forEach((ms) =>
-      setTimeout(() => {
-        try {
-          actionsRef.current?.settings?.send(roomSettingsRef.current as any);
-        } catch {}
-      }, ms)
-    );
+    const send = () => {
+      try {
+        if (broadcastSettingsRef.current) broadcastSettingsRef.current();
+        else actionsRef.current?.settings?.send(roomSettingsRef.current as any);
+      } catch {}
+    };
+    // envia já + reforços (garante que chegue em tempo real pra todos)
+    send();
+    [250, 800, 2000, 4000].forEach((ms) => setTimeout(send, ms));
     return bumped;
   }, []);
 

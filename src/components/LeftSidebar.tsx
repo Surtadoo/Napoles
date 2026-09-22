@@ -131,16 +131,23 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       {user.name}
                     </span>
                     {user.isOwner && (
-                      <Crown className="w-3.5 h-3.5 text-yellow-400 shrink-0" aria-label="Dono da sala" />
+                      <Crown
+                        className="w-3.5 h-3.5 text-yellow-400 shrink-0 drop-shadow-[0_0_4px_rgba(250,204,21,0.6)]"
+                        aria-label="Dono da sala"
+                      />
                     )}
                     {!user.isOwner &&
-                      sessionIdOf &&
-                      (() => {
-                        const sid = sessionIdOf(user.id);
-                        return sid && adminSessionIds.includes(sid) ? (
-                          <Shield className="w-3 h-3 text-yellow-300 shrink-0" aria-label="Administrador" />
-                        ) : null;
-                      })()}
+                      (user.isAdmin ||
+                        (sessionIdOf &&
+                          (() => {
+                            const sid = sessionIdOf(user.id);
+                            return !!sid && adminSessionIds.includes(sid);
+                          })())) && (
+                        <Crown
+                          className="w-3.5 h-3.5 text-amber-300 shrink-0"
+                          aria-label="Administrador"
+                        />
+                      )}
                     {user.tag && (
                       <span className="text-[10px] text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/30">
                         {user.tag}
