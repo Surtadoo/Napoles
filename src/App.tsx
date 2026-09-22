@@ -8,17 +8,11 @@ import { ShareRoomModal } from './components/ShareRoomModal';
 import { SettingsModal } from './components/SettingsModal';
 import { BetaMediaModal, BetaMediaInput } from './components/BetaMediaModal';
 import { MobileScreenShareModal } from './components/MobileScreenShareModal';
+import { ManageRoomModal } from './components/ManageRoomModal';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
-import { ManageRoomModal } from './components/ManageRoomModal';
-import {
-  Participant,
-  ChatMessage,
-  StreamState,
-  SharedMediaPayload,
-  RoomPermissions,
-} from './types';
+import { Participant, ChatMessage, StreamState, SharedMediaPayload } from './types';
 import { MediaPlatform, platformLabel } from './utils/media';
 import { initAntiInspectionAndProtection } from './utils/security';
 import { useLiveRoom } from './hooks/useLiveRoom';
@@ -43,6 +37,8 @@ export function App() {
     const fromUrl = getRoomCodeFromUrl();
     return fromUrl || generateRoomCode();
   });
+  // true quando a pessoa entrou numa sala existente (link OU código digitado) → não é dona
+  const [joinedExisting, setJoinedExisting] = useState<boolean>(() => !!getRoomCodeFromUrl());
   const [roomName] = useState('Time_do_Sky');
   const [isPrivate] = useState(true);
 
@@ -64,7 +60,8 @@ export function App() {
 
   const [isMuted, setIsMuted] = useState(true);
   const [isDeafened, setIsDeafened] = useState(false);
-  const [streamQuality, setStreamQuality] = useState('1080p 60fps');
+  // 30fps padrão = sem delay; 60fps é opcional nas configurações
+  const [streamQuality, setStreamQuality] = useState('1080p 30fps');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
 
@@ -72,7 +69,7 @@ export function App() {
     type: 'none',
     stream: null,
     title: 'Ninguém está transmitindo ainda.',
-    quality: '1080p 60fps',
+    quality: '1080p 30fps',
     isSharing: false,
     isPaused: false,
   });
@@ -95,7 +92,6 @@ export function App() {
   const [localBetaFileUrl, setLocalBetaFileUrl] = useState<string | null>(null);
   const [isMusicModalOpen, setIsMusicModalOpen] = useState(false);
   const [isProModalOpen, setIsProModalOpen] = useState(false);
-  const [isManageRoomOpen, setIsManageRoomOpen] = useState(false);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimer = useRef<NodeJS.Timeout | null>(null);
@@ -157,71 +153,60 @@ export function App() {
   const profileSharing =
     streamState.isSharing && (streamState.type === 'screen' || streamState.type === 'camera');
 
-  const [bannedBy, setBannedBy] = useState<string | null>(null);
+  const [exitReason, setExitReason] = useState<'kicked' | 'banned' | 'full' | null>(null);
 
-  // ---- dono da sala (coroa) ----
-  const isRoomOwner = !initialInviteCode && !!currentUserName;
+  const handleBanned = useCallback(() => {
+    setExitReason('banned');
+    setWasKicked(true);
+    try {
+      streamState.stream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      cameraStream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      micStreamRef.current?.getAudioTracks().forEach((t) => t.stop());
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamState.stream, cameraStream]);
+
+  const handleRoomFull = useCallback(() => {
+    setExitReason('full');
+    setWasKicked(true);
+  }, []);
 
   const liveRoom = useLiveRoom({
     roomCode,
     userName: currentUserName,
     userAvatar,
-    enabled: !!currentUserName && !wasKicked && !bannedBy,
+    enabled: !!currentUserName && !wasKicked,
     isMuted,
     isSharing: profileSharing,
     isCameraOn: isCameraActive,
+    isOwner: !joinedExisting && !!currentUserName,
     onRemoteChat: handleRemoteChat,
     onPeerJoinNotice: handlePeerJoinNotice,
     onPeerLeaveNotice: handlePeerLeaveNotice,
-    onKicked: handleKicked,
-    isLeader: isRoomOwner,
-    onBanned: ({ by }) => {
-      setBannedBy(by);
-      try {
-        streamState.stream?.getTracks().forEach((t) => t.stop());
-      } catch {}
-      try {
-        cameraStream?.getTracks().forEach((t) => t.stop());
-      } catch {}
-      try {
-        micStreamRef.current?.getAudioTracks().forEach((t) => t.stop());
-      } catch {}
+    onKicked: () => {
+      setExitReason('kicked');
+      handleKicked();
     },
-    onSettingsNotice: (text) => {
-      addSystemMessage(text);
-    },
+    onBanned: handleBanned,
+    onRoomFull: handleRoomFull,
     onMediaNotice: (text) => {
       addSystemMessage(text);
     },
-    onQualityChanged: ({ label }) => {
-      // a rede não aguentou: o app reduz sozinho pra manter a transmissão fluida
-      showToast(`Conexão instável — ajustei para ${label} para acabar com o atraso.`);
-      setStreamQuality((prev) => (/2160|4k/i.test(prev) ? '1080p 60fps' : prev));
-    },
   });
 
-  const { sharedMedia, myPeerId, roomSettings, updateRoomSettings, banPeer } = liveRoom;
+  const { sharedMedia, myPeerId, roomSettings, can } = liveRoom;
+  const [isManageOpen, setIsManageOpen] = useState(false);
 
-  // admin definido pelo dono na sala
-  const isAdmin = useMemo(
-    () =>
-      !!currentUserName &&
-      roomSettings.admins.some(
-        (a) => a.trim().toLowerCase() === currentUserName.trim().toLowerCase()
-      ),
-    [roomSettings.admins, currentUserName]
-  );
-  const canBypass = isRoomOwner || isAdmin;
-
-  /** Verifica permissão da sala; quem não pode recebe aviso. */
-  const checkPermission = useCallback(
-    (key: keyof RoomPermissions, msg: string) => {
-      if (roomSettings.permissions[key] || canBypass) return true;
-      showToast(msg);
-      return false;
+  // mostra aviso quando algo foi bloqueado pelas permissões
+  const blockedToast = useCallback(
+    (what: string) => {
+      showToast(`O dono da sala desativou "${what}" para participantes.`);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [roomSettings.permissions, canBypass]
+    [showToast]
   );
 
   const isMobileDevice = useMemo(
@@ -242,18 +227,18 @@ export function App() {
         showToast('Entre na call primeiro.');
         return;
       }
-      if (sharedMedia && sharedMedia.controller === 'leader' && sharedMedia.leaderId !== myPeerId) {
-        showToast(`Só ${sharedMedia.leaderName} pode controlar o BETA agora.`);
+      if (!can('videoSource')) {
+        blockedToast('adicionar uma fonte de vídeo');
         return;
       }
-      if (!checkPermission('videoSource', 'O dono da sala desativou adicionar fonte de vídeo.')) {
+      if (sharedMedia && sharedMedia.controller === 'leader' && sharedMedia.leaderId !== myPeerId) {
+        showToast(`Só ${sharedMedia.leaderName} pode controlar o BETA agora.`);
         return;
       }
       setBetaInitialPlatform(initial);
       setIsBetaOpen(true);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUserName, sharedMedia, myPeerId, showToast, checkPermission]
+    [currentUserName, sharedMedia, myPeerId, showToast, can, blockedToast]
   );
 
   const handleAddBeta = useCallback(
@@ -359,13 +344,12 @@ export function App() {
 
   const participants: Participant[] = useMemo(() => {
     const list: Participant[] = [];
-    const adminNames = liveRoom.roomSettings.admins.map((a) => a.trim().toLowerCase());
     if (currentUserName) {
       list.push({
         id: 'current-user',
         name: currentUserName,
         avatar: userAvatar,
-        isOwner: !initialInviteCode || adminNames.includes(currentUserName.trim().toLowerCase()),
+        isOwner: !joinedExisting,
         isMuted,
         isSpeaking: !isMuted,
         isScreenSharing: profileSharing,
@@ -374,44 +358,20 @@ export function App() {
       });
     }
     remotePeersList.forEach((p) => {
-      // status real vem das transmissões vivas (não do perfil, que pode ficar defasado)
-      const transmiteTela = remoteStreams.some(
-        (s) =>
-          s.peerId === p.peerId &&
-          (s.kind === 'screen' || s.kind === 'unknown') &&
-          s.stream.getVideoTracks().some((t) => t.readyState === 'live')
-      );
-      const transmiteCamera = remoteStreams.some(
-        (s) =>
-          s.peerId === p.peerId &&
-          s.kind === 'camera' &&
-          s.stream.getVideoTracks().some((t) => t.readyState === 'live')
-      );
       list.push({
         id: p.peerId,
         name: p.name,
-        avatar: p.avatar || avatarForName(p.name),
+        avatar: p.avatar || avatarForName(p.name === 'Conectando…' ? p.peerId : p.name),
         isGuest: true,
-        isOwner: adminNames.includes(p.name.trim().toLowerCase()),
         isMuted: p.muted,
         isSpeaking: !p.muted,
-        isScreenSharing: transmiteTela || transmiteCamera,
-        isCameraOn: transmiteCamera,
-        tag: 'na call',
+        isScreenSharing: p.sharing,
+        isCameraOn: p.cameraOn,
+        tag: p.name === 'Conectando…' ? 'entrando' : 'na call',
       });
     });
     return list;
-  }, [
-    currentUserName,
-    userAvatar,
-    isMuted,
-    profileSharing,
-    isCameraActive,
-    remotePeersList,
-    remoteStreams,
-    initialInviteCode,
-    liveRoom.roomSettings.admins,
-  ]);
+  }, [currentUserName, userAvatar, isMuted, profileSharing, isCameraActive, remotePeersList, joinedExisting]);
 
   // troca de código: gera novo, atualiza URL, limpa sala e reentra
   const handleRegenerateCode = useCallback(() => {
@@ -473,10 +433,11 @@ export function App() {
   };
 
   const handleToggleMic = async () => {
-    if (isMuted && !checkPermission('mic', 'O dono da sala desativou o microfone para todos.')) {
-      return;
-    }
     if (isMuted) {
+      if (!can('mic')) {
+        blockedToast('ligar o microfone');
+        return;
+      }
       const s = await ensureMicStream();
       if (!s) return;
       s.getAudioTracks().forEach((t) => (t.enabled = true));
@@ -502,55 +463,45 @@ export function App() {
     showToast(next ? 'Som da sala silenciado para você.' : 'Som da sala ativado.');
   };
 
-  const handleUserJoin = (userName: string, enteredCode?: string) => {
-    const wanted = (enteredCode || '').trim();
-    let targetRoom = roomCode;
-    let trocouDeSala = false;
+  const handleUserJoin = (userName: string, chosenCode: string) => {
+    // código digitado tem prioridade: entra na sala daquele código
+    // (mesmo que seja diferente do link). Vazio = cria sala nova.
+    const finalCode = chosenCode && chosenCode.trim() ? chosenCode.trim() : roomCode;
+    const enteredExisting = !!chosenCode && chosenCode.trim() !== '';
 
-    if (wanted && wanted !== roomCode) {
-      // entra na call dona do código digitado (mesmo vindo de outro link)
-      targetRoom = wanted;
-      trocouDeSala = true;
-      setRoomCode(wanted);
-      setMessages([]);
-      try {
-        streamState.stream?.getTracks().forEach((t) => t.stop());
-      } catch {}
-      liveRoom.clearMedia(userName);
-      setStreamState({
-        type: 'none',
-        stream: null,
-        videoUrl: undefined,
-        title: 'Ninguém está transmitindo ainda.',
-        quality: streamQuality,
-        isSharing: false,
-        isPaused: false,
-      });
+    if (finalCode !== roomCode) {
+      setRoomCode(finalCode);
     }
-
+    setJoinedExisting(enteredExisting || !!initialInviteCode);
     setCurrentUserName(userName);
     setIsNameModalOpen(false);
 
+    const cameFromLink = !!initialInviteCode && finalCode === initialInviteCode;
+    const switchedRoom = !!initialInviteCode && finalCode !== initialInviteCode;
+
     setTimeout(() => {
-      if (trocouDeSala) {
-        addSystemMessage(`${userName} entrou na call ${targetRoom} usando o código.`);
-        showToast(`Você entrou na call ${targetRoom}!`);
-      } else {
-        addSystemMessage(
-          initialInviteCode
-            ? `${userName} entrou na call ${targetRoom} pelo link.`
-            : `${userName} criou a sala ${targetRoom}. Copie o link para chamar amigos.`
-        );
-        showToast(
-          initialInviteCode
-            ? `Bem-vindo à call, ${userName}!`
-            : `Bem-vindo, ${userName}! Toque em Convidar para chamar.`
-        );
-      }
+      addSystemMessage(
+        switchedRoom
+          ? `${userName} entrou na call ${finalCode} pelo código (diferente do link).`
+          : cameFromLink
+            ? `${userName} entrou na call ${finalCode} pelo link.`
+            : enteredExisting
+              ? `${userName} entrou na call ${finalCode} pelo código.`
+              : `${userName} criou a sala ${finalCode}. Copie o link para chamar amigos.`
+      );
+      showToast(
+        enteredExisting || cameFromLink
+          ? `Bem-vindo à call ${finalCode}, ${userName}!`
+          : `Bem-vindo, ${userName}! Toque em Convidar para chamar.`
+      );
     }, 300);
   };
 
   const handleStartScreenShare = async () => {
+    if (!can('screen')) {
+      blockedToast('compartilhar a tela');
+      return;
+    }
     // no celular abre o menu com as opções que funcionam (tela/câmera traseira/arquivo)
     if (isMobileDevice && !streamState.isSharing) {
       setIsMobileShareOpen(true);
@@ -561,7 +512,6 @@ export function App() {
 
   const attemptNativeScreenShare = async () => {
     setIsMobileShareOpen(false);
-    if (!checkPermission('screen', 'O dono da sala desativou o compartilhamento de tela.')) return;
     try {
       const nav: any = navigator;
       const getDisplay =
@@ -578,33 +528,57 @@ export function App() {
       }
       const want4k = /4k|2160/i.test(streamQuality);
       const want1080 = /1080/i.test(streamQuality);
+      const want60 = /60/.test(streamQuality);
+      // 30fps em 4K/1080p reduz MUITO o delay (o encoder não aguenta 60fps em alta
+      // resolução e começa a atrasar depois de alguns segundos). Quem quer 60 escolhe.
+      const fps = want60 ? { ideal: 60, max: 60 } : { ideal: 30, max: 30 };
+      // cursor: 'never' = não captura o mouse (evita "vários cursores" ao ver a própria
+      // transmissão dentro da transmissão). Quem assiste vê a tela limpa.
+      const cursorOpt = { cursor: 'never' as const, displaySurface: 'monitor' as const };
       const mediaStream: MediaStream = await nav.mediaDevices.getDisplayMedia({
         video: want4k
           ? {
+              ...cursorOpt,
               width: { ideal: 3840, max: 3840 },
               height: { ideal: 2160, max: 2160 },
-              frameRate: { ideal: 60, max: 60 },
+              frameRate: fps,
             }
           : want1080
             ? {
+                ...cursorOpt,
                 width: { ideal: 1920, max: 1920 },
                 height: { ideal: 1080, max: 1080 },
-                frameRate: { ideal: 60, max: 60 },
+                frameRate: fps,
               }
-            : { frameRate: { ideal: 30, max: 30 } },
-        audio: true,
-      });
+            : { ...cursorOpt, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          // áudio do sistema sem processamento = menos atraso
+          sampleRate: 48000,
+        },
+        // evita capturar a própria aba (loop infinito de tela dentro de tela)
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
+        systemAudio: 'include',
+        preferCurrentTab: false,
+      } as any);
       const videoTrack = mediaStream.getVideoTracks()[0];
-      // força a resolução máxima que o monitor permitir (4K de verdade)
       if (videoTrack) {
         videoTrack.onended = () => handleStopSharing();
+        // 'detail' = prioriza nitidez de texto/tela; o encoder mantém resolução
+        try {
+          if ('contentHint' in videoTrack) (videoTrack as any).contentHint = 'detail';
+        } catch {}
+        // força a resolução máxima que o monitor permitir (4K de verdade)
         try {
           if (want4k) {
             await videoTrack
               .applyConstraints({
                 width: { ideal: 3840 },
                 height: { ideal: 2160 },
-                frameRate: { ideal: 60 },
+                frameRate: fps,
               } as any)
               .catch(() => {});
           }
@@ -619,21 +593,11 @@ export function App() {
         isSharing: true,
         isPaused: false,
       });
+      // registra a qualidade antes de publicar (o hook usa no tuning dos senders)
+      try {
+        liveRoom.boostSenders(streamQuality);
+      } catch {}
       liveRoom.publishStream(mediaStream, 'screen', 'screen-local');
-      // bitrate alto p/ manter a qualidade escolhida (senão o WebRTC derruba p/ 1080p)
-      setTimeout(() => {
-        try {
-          liveRoom.boostSenders(streamQuality);
-        } catch {}
-        try {
-          liveRoom.boostSenders(streamQuality);
-        } catch {}
-      }, 1200);
-      setTimeout(() => {
-        try {
-          liveRoom.boostSenders(streamQuality);
-        } catch {}
-      }, 3500);
       const track = mediaStream.getVideoTracks()[0];
       const set = track?.getSettings?.();
       const realRes = set?.width && set?.height ? ` (${set.width}×${set.height})` : '';
@@ -657,7 +621,10 @@ export function App() {
   };
 
   const handleStartCameraShare = async () => {
-    if (!checkPermission('camera', 'O dono da sala desativou a câmera para todos.')) return;
+    if (!can('camera')) {
+      blockedToast('ligar a câmera');
+      return;
+    }
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         showToast('Câmera não suportada neste aparelho.');
@@ -751,23 +718,19 @@ export function App() {
   };
 
   const handleStopSharing = () => {
-    // fecha a transmissão na hora: some da sua tela e da tela de todos
-    const ativo = streamState.stream;
-    if (ativo) {
-      // unpublish já encerra as trilhas e avisa a sala (kind: stop)
+    if (streamState.stream) {
+      // despublica (isso já para as tracks + avisa a sala → some na hora pra todos)
       try {
-        liveRoom.unpublishStream(ativo, 'screen-local');
+        const key = streamState.type === 'camera' ? 'camera-local' : 'screen-local';
+        liveRoom.unpublishStream(streamState.stream, key);
       } catch {}
-      if (streamState.type === 'camera' && cameraStream) {
-        try {
-          liveRoom.unpublishStream(cameraStream, 'camera-local');
-        } catch {}
+      if (streamState.type === 'camera') {
+        // a câmera era a transmissão principal → desliga o estado da câmera também
+        setCameraStream(null);
+        setIsCameraActive(false);
       }
       try {
-        ativo.getTracks().forEach((t) => {
-          t.onended = null;
-          t.stop();
-        });
+        streamState.stream.getTracks().forEach((t) => t.stop());
       } catch {}
     }
     if (isRecording) handleStopRecording();
@@ -781,6 +744,34 @@ export function App() {
       isPaused: false,
     });
     addSystemMessage('A transmissão foi encerrada.');
+  };
+
+  /** Sai da call de verdade: fecha tela/câmera/mic, avisa a sala e volta ao início. */
+  const handleLeaveCall = () => {
+    try {
+      if (isRecording) handleStopRecording();
+    } catch {}
+    // para minhas mídias locais
+    try {
+      streamState.stream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      cameraStream?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    try {
+      if (localBetaFileUrl) URL.revokeObjectURL(localBetaFileUrl);
+    } catch {}
+    // avisa todo mundo que saí (nome some da lista + transmissão fecha nos outros)
+    try {
+      liveRoom.leaveRoom();
+    } catch {}
+    // dá tempo do sinal sair antes de recarregar
+    setTimeout(() => {
+      window.location.href = window.location.pathname;
+    }, 350);
   };
 
   const handleStartRecording = () => {
@@ -839,19 +830,6 @@ export function App() {
   };
 
   const handleSendMessage = (text: string, gifUrl?: string) => {
-    // permissões de chat / gif / imagem
-    if (gifUrl) {
-      if (!checkPermission('gifs', 'O dono da sala desativou o envio de GIFs.')) return;
-      if (
-        text === 'Compartilhou uma captura 🎮' &&
-        !checkPermission('images', 'O dono da sala desativou o envio de imagens.')
-      ) {
-        return;
-      }
-    } else if (!checkPermission('chat', 'O dono da sala desativou o chat para todos.')) {
-      return;
-    }
-
     const activeName = currentUserName || 'Você';
     const newMsg: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -897,12 +875,7 @@ export function App() {
         onOpenMusic={() => setIsMusicModalOpen(true)}
         onDisconnect={() => {
           if (confirm('Sair da call?')) {
-            // para a transmissão e avisa a sala: nome + tela saem na hora
-            handleStopSharing();
-            try {
-              liveRoom.announceLeave();
-            } catch {}
-            window.location.href = window.location.pathname;
+            handleLeaveCall();
           }
         }}
         onShareRoom={() => setIsShareModalOpen(true)}
@@ -924,15 +897,11 @@ export function App() {
             userPoints={userPoints}
             connectionStatus={connectionStatus}
             shareUrl={shareUrl}
-            isOwner={canBypass}
+            isOwner={!joinedExisting && !!currentUserName}
             onKickParticipant={handleKickParticipant}
-            onBanParticipant={(peerId: string, name: string) => {
-              banPeer(peerId, name);
-              addSystemMessage(`${name} foi banido da sala.`);
-              showToast(`${name} foi banido — não entra mais.`);
-            }}
-            canManageRoom={isRoomOwner}
-            onManageRoom={() => setIsManageRoomOpen(true)}
+            onManageRoom={() => setIsManageOpen(true)}
+            adminSessionIds={roomSettings.admins}
+            sessionIdOf={(pid) => liveRoom.remotePeers[pid]?.sessionId}
           />
         </div>
 
@@ -978,6 +947,10 @@ export function App() {
             }}
             currentUserName={currentUserName || 'Você'}
             className="w-full"
+            canChat={can('chat')}
+            canGif={can('gifs')}
+            canImage={can('images')}
+            onBlocked={blockedToast}
           />
         </div>
       </div>
@@ -1013,29 +986,7 @@ export function App() {
         </button>
       </nav>
 
-      {bannedBy && (
-        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#141822] border border-orange-500/40 rounded-2xl w-full max-w-sm p-6 text-center">
-            <div className="w-14 h-14 mx-auto rounded-full bg-orange-500/15 border border-orange-500/40 flex items-center justify-center mb-3">
-              <span className="text-2xl">⛔</span>
-            </div>
-            <h2 className="text-white font-bold text-base">Você foi banido da sala</h2>
-            <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">
-              {bannedBy} removeu você. Você não consegue mais entrar nesta sala.
-            </p>
-            <button
-              onClick={() => {
-                window.location.href = window.location.pathname;
-              }}
-              className="mt-4 w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold touch-manipulation"
-            >
-              Voltar ao início
-            </button>
-          </div>
-        </div>
-      )}
-
-      {toastMessage && !wasKicked && !bannedBy && (
+      {toastMessage && !wasKicked && (
         <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 z-[90] bg-[#1e2738] text-white text-xs px-4 py-3 rounded-xl shadow-2xl border border-emerald-500/50 flex items-center gap-2.5 max-w-[92vw]">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
           <span className="break-words">{toastMessage}</span>
@@ -1046,17 +997,24 @@ export function App() {
         <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-[#141822] border border-red-500/40 rounded-2xl w-full max-w-sm p-6 text-center">
             <div className="w-14 h-14 mx-auto rounded-full bg-red-500/15 border border-red-500/40 flex items-center justify-center mb-3">
-              <span className="text-2xl">🚫</span>
+              <span className="text-2xl">{exitReason === 'full' ? '🚪' : exitReason === 'banned' ? '⛔' : '🚫'}</span>
             </div>
-            <h2 className="text-white font-bold text-base">Você foi desconectado da call</h2>
+            <h2 className="text-white font-bold text-base">
+              {exitReason === 'full'
+                ? 'Sala cheia'
+                : exitReason === 'banned'
+                  ? 'Você foi banido desta sala'
+                  : 'Você foi desconectado da call'}
+            </h2>
             <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">
-              O dono da sala removeu você. Peça um novo link para entrar de novo.
+              {exitReason === 'full'
+                ? 'O dono definiu um limite de participantes e a sala já está lotada. Tente de novo mais tarde.'
+                : exitReason === 'banned'
+                  ? 'O dono da sala baniu você. Não é possível entrar de novo nesta sala.'
+                  : 'O dono da sala removeu você. Peça um novo link para entrar de novo.'}
             </p>
             <button
               onClick={() => {
-                try {
-                  liveRoom.announceLeave();
-                } catch {}
                 window.location.href = window.location.pathname;
               }}
               className="mt-4 w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold touch-manipulation"
@@ -1066,6 +1024,43 @@ export function App() {
           </div>
         </div>
       )}
+
+      <ManageRoomModal
+        isOpen={isManageOpen}
+        onClose={() => setIsManageOpen(false)}
+        settings={roomSettings}
+        participants={participants}
+        sessionIdOf={(pid) => liveRoom.remotePeers[pid]?.sessionId}
+        onSetPermission={(key, value) => {
+          liveRoom.setPermission(key, value);
+          addSystemMessage(
+            value
+              ? `Dono liberou "${key}" para todos.`
+              : `Dono desativou "${key}" — só dono e admins podem agora.`
+          );
+        }}
+        onSetMaxParticipants={(max) => {
+          liveRoom.setMaxParticipants(max);
+          addSystemMessage(max > 0 ? `Limite da sala: ${max} pessoas.` : 'Limite da sala removido.');
+        }}
+        onToggleAdmin={(sid) => {
+          const wasAdmin = roomSettings.admins.includes(sid);
+          liveRoom.toggleAdmin(sid);
+          const who = participants.find((p) => liveRoom.remotePeers[p.id]?.sessionId === sid)?.name || 'Alguém';
+          addSystemMessage(wasAdmin ? `${who} não é mais administrador.` : `${who} agora é administrador.`);
+          showToast(wasAdmin ? `${who} removido dos admins.` : `${who} virou admin!`);
+        }}
+        onBan={(pid, name) => {
+          liveRoom.banPeer(pid, name);
+          addSystemMessage(`${name} foi banido da sala.`);
+          showToast(`${name} foi banido.`);
+        }}
+        onUnban={(sid) => {
+          const who = roomSettings.banned.find((b) => b.sessionId === sid)?.name || 'Alguém';
+          liveRoom.unbanSession(sid);
+          addSystemMessage(`${who} foi desbanido.`);
+        }}
+      />
 
       <ShareRoomModal
         isOpen={isShareModalOpen}
@@ -1098,20 +1093,6 @@ export function App() {
         onNativeScreen={() => attemptNativeScreenShare()}
         onRearCamera={() => handleRearCameraShare()}
         onOpenFile={() => handleMobileOpenFile()}
-      />
-
-      <ManageRoomModal
-        isOpen={isManageRoomOpen}
-        onClose={() => setIsManageRoomOpen(false)}
-        settings={roomSettings}
-        participants={participants}
-        myName={currentUserName || 'Você'}
-        onUpdateSettings={updateRoomSettings}
-        onBan={(peerId, name) => {
-          banPeer(peerId, name);
-          addSystemMessage(`${name} foi banido da sala.`);
-          showToast(`${name} foi banido — não entra mais.`);
-        }}
       />
 
       <MusicPlayerModal isOpen={isMusicModalOpen} onClose={() => setIsMusicModalOpen(false)} />

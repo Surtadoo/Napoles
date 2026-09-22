@@ -35,6 +35,7 @@ export interface StreamState {
   isPaused: boolean;
 }
 
+/** Permissões da sala — quando false, só dono + admins podem fazer aquilo */
 export interface RoomPermissions {
   mic: boolean;
   screen: boolean;
@@ -43,31 +44,39 @@ export interface RoomPermissions {
   chat: boolean;
   gifs: boolean;
   images: boolean;
-  proTheme: boolean;
+  theme: boolean;
 }
 
+export const DEFAULT_PERMISSIONS: RoomPermissions = {
+  mic: true,
+  screen: true,
+  camera: true,
+  videoSource: true,
+  chat: true,
+  gifs: true,
+  images: true,
+  theme: true,
+};
+
+export interface BannedEntry {
+  sessionId: string;
+  name: string;
+  bannedAt: number;
+  by: string;
+}
+
+/** Estado de gerência da sala — sincronizado do dono para todos */
 export interface RoomSettings {
   permissions: RoomPermissions;
-  limit: number; // 0 = sem limite
-  admins: string[]; // nomes
-  bans: string[]; // nomes
+  /** sessionIds dos administradores */
+  admins: string[];
+  banned: BannedEntry[];
+  /** 0 = sem limite */
+  maxParticipants: number;
+  ownerSessionId: string;
+  ownerName: string;
+  version: number;
 }
-
-export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
-  permissions: {
-    mic: true,
-    screen: true,
-    camera: true,
-    videoSource: true,
-    chat: true,
-    gifs: true,
-    images: true,
-    proTheme: true,
-  },
-  limit: 0,
-  admins: [],
-  bans: [],
-};
 
 export type SharedMediaPlatform = 'youtube' | 'twitch' | 'kick' | 'file';
 export type SharedMediaController = 'leader' | 'any';

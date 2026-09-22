@@ -18,6 +18,11 @@ interface RightSidebarProps {
   onToggleStreamerMode: () => void;
   currentUserName: string;
   className?: string;
+  /** permissões (dono/admin sempre true) */
+  canChat?: boolean;
+  canGif?: boolean;
+  canImage?: boolean;
+  onBlocked?: (what: string) => void;
 }
 
 const SAMPLE_GIFS = [
@@ -37,6 +42,10 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   onToggleStreamerMode,
   currentUserName,
   className = '',
+  canChat = true,
+  canGif = true,
+  canImage = true,
+  onBlocked,
 }) => {
   const [inputText, setInputText] = useState('');
   const [showGifPicker, setShowGifPicker] = useState(false);
@@ -50,6 +59,10 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim()) return;
+    if (!canChat) {
+      onBlocked?.('enviar mensagens no chat');
+      return;
+    }
     onSendMessage(inputText.trim());
     setInputText('');
     setShowGifPicker(false);
@@ -57,6 +70,11 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   };
 
   const handleSendGif = (url: string) => {
+    if (!canGif) {
+      onBlocked?.('enviar GIFs');
+      setShowGifPicker(false);
+      return;
+    }
     onSendMessage('', url);
     setShowGifPicker(false);
   };
@@ -190,11 +208,15 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
           <button
             type="button"
             onClick={() => {
+              if (!canImage) {
+                onBlocked?.('enviar imagens');
+                return;
+              }
               const dummyImg = 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=400&q=80';
               onSendMessage('Compartilhou uma captura 🎮', dummyImg);
             }}
-            title="Enviar imagem"
-            className="text-gray-400 hover:text-white p-1 rounded-md transition-colors"
+            title={canImage ? 'Enviar imagem' : 'Imagens desativadas pelo dono'}
+            className={`p-1 rounded-md transition-colors ${canImage ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'}`}
           >
             <Plus className="w-4 h-4" />
           </button>
@@ -203,7 +225,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="Digite uma mensagem..."
+            disabled={!canChat}
+            placeholder={canChat ? 'Digite uma mensagem...' : 'Chat desativado pelo dono da sala'}
             className="flex-1 bg-transparent text-xs text-gray-100 placeholder-gray-500 outline-none py-1.5 min-w-0"
           />
 

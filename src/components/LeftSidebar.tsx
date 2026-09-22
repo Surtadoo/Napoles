@@ -12,9 +12,8 @@ import {
   Wifi,
   Loader2,
   UserX,
-  Ban,
+  Settings,
   Crown,
-  Settings2,
 } from 'lucide-react';
 import { Participant } from '../types';
 
@@ -27,9 +26,9 @@ interface LeftSidebarProps {
   className?: string;
   isOwner: boolean;
   onKickParticipant: (peerId: string, name: string) => void;
-  onBanParticipant: (peerId: string, name: string) => void;
-  canManageRoom: boolean;
-  onManageRoom: () => void;
+  onManageRoom?: () => void;
+  adminSessionIds?: string[];
+  sessionIdOf?: (participantId: string) => string | undefined;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -40,9 +39,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   className = '',
   isOwner,
   onKickParticipant,
-  onBanParticipant,
-  canManageRoom,
   onManageRoom,
+  adminSessionIds = [],
+  sessionIdOf,
 }) => {
   const [showTransformPrompt, setShowTransformPrompt] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -131,7 +130,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     <span className="text-xs font-semibold text-emerald-300 truncate">
                       {user.name}
                     </span>
-                    {user.isOwner && <span className="text-yellow-400 text-xs">⭐</span>}
+                    {user.isOwner && (
+                      <Crown className="w-3.5 h-3.5 text-yellow-400 shrink-0" aria-label="Dono da sala" />
+                    )}
+                    {!user.isOwner &&
+                      sessionIdOf &&
+                      (() => {
+                        const sid = sessionIdOf(user.id);
+                        return sid && adminSessionIds.includes(sid) ? (
+                          <Shield className="w-3 h-3 text-yellow-300 shrink-0" aria-label="Administrador" />
+                        ) : null;
+                      })()}
                     {user.tag && (
                       <span className="text-[10px] text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/30">
                         {user.tag}
@@ -154,37 +163,34 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   <Volume2 className="w-3.5 h-3.5 text-gray-400" />
                 )}
                 {isOwner && user.id !== 'current-user' && (
-                  <>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Desconectar ${user.name} da call?`)) {
-                          onKickParticipant(user.id, user.name);
-                        }
-                      }}
-                      title={`Desconectar ${user.name} da call`}
-                      className="p-1.5 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors touch-manipulation"
-                    >
-                      <UserX className="w-3.5 h-3.5" />
-                    </button>
-                    {canManageRoom && (
-                      <button
-                        onClick={() => {
-                          if (confirm(`Banir ${user.name}? A pessoa não consegue mais entrar.`)) {
-                            onBanParticipant(user.id, user.name);
-                          }
-                        }}
-                        title={`Banir ${user.name} da sala`}
-                        className="p-1.5 rounded-md text-gray-500 hover:text-orange-400 hover:bg-orange-500/10 transition-colors touch-manipulation"
-                      >
-                        <Ban className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Desconectar ${user.name} da call?`)) {
+                        onKickParticipant(user.id, user.name);
+                      }
+                    }}
+                    title={`Desconectar ${user.name} da call`}
+                    className="p-1.5 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors touch-manipulation"
+                  >
+                    <UserX className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
             </div>
           ))}
         </div>
+
+        {/* Gerenciar sala — só quem tem a coroa (dono) */}
+        {isOwner && onManageRoom && (
+          <button
+            onClick={onManageRoom}
+            className="mt-3 w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-yellow-500/15 to-amber-500/10 hover:from-yellow-500/25 hover:to-amber-500/20 border border-yellow-500/40 text-yellow-200 text-xs font-bold flex items-center justify-center gap-2 transition-all touch-manipulation"
+          >
+            <Crown className="w-4 h-4 text-yellow-400" />
+            <Settings className="w-3.5 h-3.5" />
+            Gerenciar sala
+          </button>
+        )}
 
         {/* convite — copia link real, sem bots */}
         <div className="mt-3 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-2">
@@ -212,18 +218,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             Abrir opções de convite
           </button>
         </div>
-
-        {/* painel do dono da sala (coroa) */}
-        {canManageRoom && (
-          <button
-            onClick={onManageRoom}
-            className="mt-3 w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-yellow-500/15 to-amber-500/10 hover:from-yellow-500/25 border border-yellow-500/40 text-gray-100 text-xs font-bold flex items-center justify-center gap-2 transition-all touch-manipulation"
-          >
-            <Crown className="w-4 h-4 text-yellow-400" />
-            <span>Gerenciar sala</span>
-            <Settings2 className="w-3.5 h-3.5 text-yellow-300/80" />
-          </button>
-        )}
 
         {showTransformPrompt && (
           <div className="mt-3 relative">
