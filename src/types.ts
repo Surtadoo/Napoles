@@ -35,6 +35,40 @@ export interface StreamState {
   isPaused: boolean;
 }
 
+export interface RoomPermissions {
+  mic: boolean;
+  screen: boolean;
+  camera: boolean;
+  videoSource: boolean;
+  chat: boolean;
+  gifs: boolean;
+  images: boolean;
+  proTheme: boolean;
+}
+
+export interface RoomSettings {
+  permissions: RoomPermissions;
+  limit: number; // 0 = sem limite
+  admins: string[]; // nomes
+  bans: string[]; // nomes
+}
+
+export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
+  permissions: {
+    mic: true,
+    screen: true,
+    camera: true,
+    videoSource: true,
+    chat: true,
+    gifs: true,
+    images: true,
+    proTheme: true,
+  },
+  limit: 0,
+  admins: [],
+  bans: [],
+};
+
 export type SharedMediaPlatform = 'youtube' | 'twitch' | 'kick' | 'file';
 export type SharedMediaController = 'leader' | 'any';
 

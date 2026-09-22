@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { joinRoom, selfId } from 'trystero';
-import type { ChatMessage, SharedMediaPayload } from '../types';
+import type { ChatMessage, SharedMediaPayload, RoomSettings } from '../types';
+import { DEFAULT_ROOM_SETTINGS } from '../types';
 
 export interface RemotePeerProfile {
   peerId: string;
@@ -34,6 +35,10 @@ interface UseLiveRoomOptions {
   onKicked?: () => void;
   onMediaNotice?: (text: string) => void;
   onQualityChanged?: (info: { label: string }) => void;
+  /** sou o dono da sala (coroa) — controlo permissões, admin, limite e banimentos */
+  isLeader?: boolean;
+  onBanned?: (info: { by: string }) => void;
+  onSettingsNotice?: (text: string) => void;
 }
 
 const APP_ID = 'livedc-call-v2-stable';
@@ -72,11 +77,15 @@ export function useLiveRoom({
   onKicked,
   onMediaNotice,
   onQualityChanged,
+  isLeader,
+  onBanned,
+  onSettingsNotice,
 }: UseLiveRoomOptions) {
   const [remotePeers, setRemotePeers] = useState<Record<string, RemotePeerProfile>>({});
   const [remoteStreams, setRemoteStreams] = useState<RemoteStreamInfo[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connecting' | 'connected'>('idle');
   const [sharedMedia, setSharedMedia] = useState<SharedMediaPayload | null>(null);
+  const [roomSettings, setRoomSettings] = useState<RoomSettings>(DEFAULT_ROOM_SETTINGS);
 
   const roomRef = useRef<any>(null);
   const actionsRef = useRef<{
@@ -87,7 +96,12 @@ export function useLiveRoom({
     hello?: any;
     bye?: any;
     stream?: any;
+    settings?: any;
   } | null>(null);
+
+  const roomSettingsRef = useRef<RoomSettings>(DEFAULT_ROOM_SETTINGS);
+  roomSettingsRef.current = roomSettings;
+  const isLeaderRef = useRef(false);
   const localStreamsRef = useRef<Map<string, { stream: MediaStream; kind: string }>>(new Map());
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const roomCodeRef = useRef(roomCode);
@@ -100,6 +114,8 @@ export function useLiveRoom({
     onKicked,
     onMediaNotice,
     onQualityChanged,
+    onBanned,
+    onSettingsNotice,
   });
   cbRef.current = {
     onRemoteChat,
@@ -108,7 +124,11 @@ export function useLiveRoom({
     onKicked,
     onMediaNotice,
     onQualityChanged,
+    onBanned,
+    onSettingsNotice,
   };
+
+  isLeaderRef.current = !!isLeader;
 
   const profileRef = useRef({ userName, userAvatar, isMuted, isSharing, isCameraOn });
   profileRef.current = { userName, userAvatar, isMuted, isSharing, isCameraOn };
@@ -327,6 +347,7 @@ export function useLiveRoom({
     const helloAction = room.makeAction('livedc-hello-v1');
     const byeAction = room.makeAction('livedc-bye-v1');
     const streamAction = room.makeAction('livedc-stream-v1');
+    const settingsAction = room.makeAction('livedc-settings-v1');
     actionsRef.current = {
       profile: profileAction,
       chat: chatAction,
@@ -335,7 +356,31 @@ export function useLiveRoom({
       hello: helloAction,
       bye: byeAction,
       stream: streamAction,
+      settings: settingsAction,
     };
+
+    // ---- configurações da sala (só o líder manda; todos obedecem) ----
+    try {
+      (settingsAction as any).onMessage = (data: any, meta: any) => {
+        const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
+        if (!data || cancelled) return;
+        if (data.kind === 'ban' && data.targetName) {
+          // fui banido?
+          if (String(data.targetName).trim().toLowerCase() === String(profileRef.current.userName).trim().toLowerCase()) {
+            cbRef.current.onBanned?.({ by: String(data.by || 'O dono da sala') });
+          }
+          return;
+        }
+        if (data.kind === 'settings' && data.settings) {
+          setRoomSettings(data.settings as RoomSettings);
+          cbRef.current.onSettingsNotice?.(
+            `Configurações da sala atualizadas por ${String(data.by || 'admin')}.`
+          );
+        }
+        // aviso de expulsão silenciosa já entra pelo canal de kick
+        void peerId;
+      };
+    } catch {}
 
     // ---- "tchau": a pessoa saiu da call → sai da lista e fecha a tela dela ----
     try {
@@ -466,11 +511,34 @@ export function useLiveRoom({
       });
     };
 
+    const sendSettingsTo = (target?: string) => {
+      try {
+        const payload = {
+          kind: 'settings',
+          settings: roomSettingsRef.current,
+          by: profileRef.current.userName,
+        };
+        if (target) settingsAction.send(payload, { target } as any);
+        else settingsAction.send(payload);
+      } catch {
+        try {
+          const payload = {
+            kind: 'settings',
+            settings: roomSettingsRef.current,
+            by: profileRef.current.userName,
+          };
+          if (target) (settingsAction as any).send(payload, target);
+          else (settingsAction as any).send(payload);
+        } catch {}
+      }
+    };
+
     const greetPeer = (peerId: string, forceAsk = false) => {
       if (!peerId || cancelled) return;
       broadcastProfile(peerId);
       sendMediaTo(peerId);
       pushLocalStreamsTo(peerId);
+      if (isLeaderRef.current) sendSettingsTo(peerId);
       if (!greeted.has(peerId) || forceAsk) {
         greeted.add(peerId);
         try {
@@ -547,6 +615,44 @@ export function useLiveRoom({
                 }
               });
           });
+        }
+
+        // ---- líder aplica banimentos ----
+        const s = roomSettingsRef.current;
+        if (isLeaderRef.current && s.bans.some((b) => b.trim().toLowerCase() === norm)) {
+          try {
+            (settingsAction as any).send({
+              kind: 'ban',
+              targetName: name,
+              by: profileRef.current.userName,
+            });
+          } catch {}
+          try {
+            kickAction.send({ target: peerId, by: profileRef.current.userName, reason: 'ban' });
+          } catch {}
+          dropPeer(peerId, false);
+          cbRef.current.onSettingsNotice?.(`${name} tentou entrar, mas está banido da sala.`);
+          return;
+        }
+
+        // ---- líder respeita o limite de participantes ----
+        if (isLeaderRef.current && s.limit > 0) {
+          const ehAdmin = s.admins.some((a) => a.trim().toLowerCase() === norm);
+          const conectados = Object.keys(remotePeersRef.current).length;
+          if (!ehAdmin && conectados > s.limit) {
+            try {
+              kickAction.send({
+                target: peerId,
+                by: profileRef.current.userName,
+                reason: 'limit',
+              });
+            } catch {}
+            dropPeer(peerId, false);
+            cbRef.current.onSettingsNotice?.(
+              `${name} não entrou: sala cheia (limite ${s.limit} pessoas).`
+            );
+            return;
+          }
         }
 
         setRemotePeers((prev) => ({
@@ -905,6 +1011,47 @@ export function useLiveRoom({
     [stopQualityMonitor]
   );
 
+  /** Só o líder: aplica e sincroniza as configurações da sala para todos. */
+  const updateRoomSettings = useCallback((next: RoomSettings) => {
+    setRoomSettings(next);
+    try {
+      actionsRef.current?.settings?.send({
+        kind: 'settings',
+        settings: next,
+        by: profileRef.current.userName,
+      });
+    } catch {}
+  }, []);
+
+  /** Só o líder: bane alguém da sala (não entra mais + sai agora). */
+  const banPeer = useCallback(
+    (peerId: string, name: string) => {
+      const next: RoomSettings = {
+        ...roomSettingsRef.current,
+        bans: Array.from(new Set([...roomSettingsRef.current.bans, name])),
+      };
+      updateRoomSettings(next);
+      try {
+        actionsRef.current?.settings?.send({
+          kind: 'ban',
+          targetName: name,
+          by: profileRef.current.userName,
+        });
+      } catch {}
+      if (peerId) {
+        try {
+          actionsRef.current?.kick?.send({
+            target: peerId,
+            by: profileRef.current.userName,
+            reason: 'ban',
+          });
+        } catch {}
+        dropPeer(peerId, true);
+      }
+    },
+    [dropPeer, updateRoomSettings]
+  );
+
   /** Avisa a sala que estou saindo (tira meu nome e minha tela na hora). */
   const announceLeave = useCallback(() => {
     try {
@@ -1000,5 +1147,8 @@ export function useLiveRoom({
     clearMedia,
     announceLeave,
     dropPeer,
+    roomSettings,
+    updateRoomSettings,
+    banPeer,
   };
 }

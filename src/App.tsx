@@ -11,7 +11,14 @@ import { MobileScreenShareModal } from './components/MobileScreenShareModal';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
-import { Participant, ChatMessage, StreamState, SharedMediaPayload } from './types';
+import { ManageRoomModal } from './components/ManageRoomModal';
+import {
+  Participant,
+  ChatMessage,
+  StreamState,
+  SharedMediaPayload,
+  RoomPermissions,
+} from './types';
 import { MediaPlatform, platformLabel } from './utils/media';
 import { initAntiInspectionAndProtection } from './utils/security';
 import { useLiveRoom } from './hooks/useLiveRoom';
@@ -88,6 +95,7 @@ export function App() {
   const [localBetaFileUrl, setLocalBetaFileUrl] = useState<string | null>(null);
   const [isMusicModalOpen, setIsMusicModalOpen] = useState(false);
   const [isProModalOpen, setIsProModalOpen] = useState(false);
+  const [isManageRoomOpen, setIsManageRoomOpen] = useState(false);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimer = useRef<NodeJS.Timeout | null>(null);
@@ -149,11 +157,16 @@ export function App() {
   const profileSharing =
     streamState.isSharing && (streamState.type === 'screen' || streamState.type === 'camera');
 
+  const [bannedBy, setBannedBy] = useState<string | null>(null);
+
+  // ---- dono da sala (coroa) ----
+  const isRoomOwner = !initialInviteCode && !!currentUserName;
+
   const liveRoom = useLiveRoom({
     roomCode,
     userName: currentUserName,
     userAvatar,
-    enabled: !!currentUserName && !wasKicked,
+    enabled: !!currentUserName && !wasKicked && !bannedBy,
     isMuted,
     isSharing: profileSharing,
     isCameraOn: isCameraActive,
@@ -161,6 +174,22 @@ export function App() {
     onPeerJoinNotice: handlePeerJoinNotice,
     onPeerLeaveNotice: handlePeerLeaveNotice,
     onKicked: handleKicked,
+    isLeader: isRoomOwner,
+    onBanned: ({ by }) => {
+      setBannedBy(by);
+      try {
+        streamState.stream?.getTracks().forEach((t) => t.stop());
+      } catch {}
+      try {
+        cameraStream?.getTracks().forEach((t) => t.stop());
+      } catch {}
+      try {
+        micStreamRef.current?.getAudioTracks().forEach((t) => t.stop());
+      } catch {}
+    },
+    onSettingsNotice: (text) => {
+      addSystemMessage(text);
+    },
     onMediaNotice: (text) => {
       addSystemMessage(text);
     },
@@ -171,7 +200,29 @@ export function App() {
     },
   });
 
-  const { sharedMedia, myPeerId } = liveRoom;
+  const { sharedMedia, myPeerId, roomSettings, updateRoomSettings, banPeer } = liveRoom;
+
+  // admin definido pelo dono na sala
+  const isAdmin = useMemo(
+    () =>
+      !!currentUserName &&
+      roomSettings.admins.some(
+        (a) => a.trim().toLowerCase() === currentUserName.trim().toLowerCase()
+      ),
+    [roomSettings.admins, currentUserName]
+  );
+  const canBypass = isRoomOwner || isAdmin;
+
+  /** Verifica permissão da sala; quem não pode recebe aviso. */
+  const checkPermission = useCallback(
+    (key: keyof RoomPermissions, msg: string) => {
+      if (roomSettings.permissions[key] || canBypass) return true;
+      showToast(msg);
+      return false;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roomSettings.permissions, canBypass]
+  );
 
   const isMobileDevice = useMemo(
     () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ''),
@@ -195,10 +246,14 @@ export function App() {
         showToast(`Só ${sharedMedia.leaderName} pode controlar o BETA agora.`);
         return;
       }
+      if (!checkPermission('videoSource', 'O dono da sala desativou adicionar fonte de vídeo.')) {
+        return;
+      }
       setBetaInitialPlatform(initial);
       setIsBetaOpen(true);
     },
-    [currentUserName, sharedMedia, myPeerId, showToast]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUserName, sharedMedia, myPeerId, showToast, checkPermission]
   );
 
   const handleAddBeta = useCallback(
@@ -304,12 +359,13 @@ export function App() {
 
   const participants: Participant[] = useMemo(() => {
     const list: Participant[] = [];
+    const adminNames = liveRoom.roomSettings.admins.map((a) => a.trim().toLowerCase());
     if (currentUserName) {
       list.push({
         id: 'current-user',
         name: currentUserName,
         avatar: userAvatar,
-        isOwner: !initialInviteCode,
+        isOwner: !initialInviteCode || adminNames.includes(currentUserName.trim().toLowerCase()),
         isMuted,
         isSpeaking: !isMuted,
         isScreenSharing: profileSharing,
@@ -318,20 +374,44 @@ export function App() {
       });
     }
     remotePeersList.forEach((p) => {
+      // status real vem das transmissões vivas (não do perfil, que pode ficar defasado)
+      const transmiteTela = remoteStreams.some(
+        (s) =>
+          s.peerId === p.peerId &&
+          (s.kind === 'screen' || s.kind === 'unknown') &&
+          s.stream.getVideoTracks().some((t) => t.readyState === 'live')
+      );
+      const transmiteCamera = remoteStreams.some(
+        (s) =>
+          s.peerId === p.peerId &&
+          s.kind === 'camera' &&
+          s.stream.getVideoTracks().some((t) => t.readyState === 'live')
+      );
       list.push({
         id: p.peerId,
         name: p.name,
         avatar: p.avatar || avatarForName(p.name),
         isGuest: true,
+        isOwner: adminNames.includes(p.name.trim().toLowerCase()),
         isMuted: p.muted,
         isSpeaking: !p.muted,
-        isScreenSharing: p.sharing,
-        isCameraOn: p.cameraOn,
+        isScreenSharing: transmiteTela || transmiteCamera,
+        isCameraOn: transmiteCamera,
         tag: 'na call',
       });
     });
     return list;
-  }, [currentUserName, userAvatar, isMuted, profileSharing, isCameraActive, remotePeersList, initialInviteCode]);
+  }, [
+    currentUserName,
+    userAvatar,
+    isMuted,
+    profileSharing,
+    isCameraActive,
+    remotePeersList,
+    remoteStreams,
+    initialInviteCode,
+    liveRoom.roomSettings.admins,
+  ]);
 
   // troca de código: gera novo, atualiza URL, limpa sala e reentra
   const handleRegenerateCode = useCallback(() => {
@@ -393,6 +473,9 @@ export function App() {
   };
 
   const handleToggleMic = async () => {
+    if (isMuted && !checkPermission('mic', 'O dono da sala desativou o microfone para todos.')) {
+      return;
+    }
     if (isMuted) {
       const s = await ensureMicStream();
       if (!s) return;
@@ -478,6 +561,7 @@ export function App() {
 
   const attemptNativeScreenShare = async () => {
     setIsMobileShareOpen(false);
+    if (!checkPermission('screen', 'O dono da sala desativou o compartilhamento de tela.')) return;
     try {
       const nav: any = navigator;
       const getDisplay =
@@ -573,6 +657,7 @@ export function App() {
   };
 
   const handleStartCameraShare = async () => {
+    if (!checkPermission('camera', 'O dono da sala desativou a câmera para todos.')) return;
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         showToast('Câmera não suportada neste aparelho.');
@@ -754,6 +839,19 @@ export function App() {
   };
 
   const handleSendMessage = (text: string, gifUrl?: string) => {
+    // permissões de chat / gif / imagem
+    if (gifUrl) {
+      if (!checkPermission('gifs', 'O dono da sala desativou o envio de GIFs.')) return;
+      if (
+        text === 'Compartilhou uma captura 🎮' &&
+        !checkPermission('images', 'O dono da sala desativou o envio de imagens.')
+      ) {
+        return;
+      }
+    } else if (!checkPermission('chat', 'O dono da sala desativou o chat para todos.')) {
+      return;
+    }
+
     const activeName = currentUserName || 'Você';
     const newMsg: ChatMessage = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -826,8 +924,15 @@ export function App() {
             userPoints={userPoints}
             connectionStatus={connectionStatus}
             shareUrl={shareUrl}
-            isOwner={!initialInviteCode && !!currentUserName}
+            isOwner={canBypass}
             onKickParticipant={handleKickParticipant}
+            onBanParticipant={(peerId: string, name: string) => {
+              banPeer(peerId, name);
+              addSystemMessage(`${name} foi banido da sala.`);
+              showToast(`${name} foi banido — não entra mais.`);
+            }}
+            canManageRoom={isRoomOwner}
+            onManageRoom={() => setIsManageRoomOpen(true)}
           />
         </div>
 
@@ -908,7 +1013,29 @@ export function App() {
         </button>
       </nav>
 
-      {toastMessage && !wasKicked && (
+      {bannedBy && (
+        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#141822] border border-orange-500/40 rounded-2xl w-full max-w-sm p-6 text-center">
+            <div className="w-14 h-14 mx-auto rounded-full bg-orange-500/15 border border-orange-500/40 flex items-center justify-center mb-3">
+              <span className="text-2xl">⛔</span>
+            </div>
+            <h2 className="text-white font-bold text-base">Você foi banido da sala</h2>
+            <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">
+              {bannedBy} removeu você. Você não consegue mais entrar nesta sala.
+            </p>
+            <button
+              onClick={() => {
+                window.location.href = window.location.pathname;
+              }}
+              className="mt-4 w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold touch-manipulation"
+            >
+              Voltar ao início
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toastMessage && !wasKicked && !bannedBy && (
         <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 z-[90] bg-[#1e2738] text-white text-xs px-4 py-3 rounded-xl shadow-2xl border border-emerald-500/50 flex items-center gap-2.5 max-w-[92vw]">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
           <span className="break-words">{toastMessage}</span>
@@ -971,6 +1098,20 @@ export function App() {
         onNativeScreen={() => attemptNativeScreenShare()}
         onRearCamera={() => handleRearCameraShare()}
         onOpenFile={() => handleMobileOpenFile()}
+      />
+
+      <ManageRoomModal
+        isOpen={isManageRoomOpen}
+        onClose={() => setIsManageRoomOpen(false)}
+        settings={roomSettings}
+        participants={participants}
+        myName={currentUserName || 'Você'}
+        onUpdateSettings={updateRoomSettings}
+        onBan={(peerId, name) => {
+          banPeer(peerId, name);
+          addSystemMessage(`${name} foi banido da sala.`);
+          showToast(`${name} foi banido — não entra mais.`);
+        }}
       />
 
       <MusicPlayerModal isOpen={isMusicModalOpen} onClose={() => setIsMusicModalOpen(false)} />
