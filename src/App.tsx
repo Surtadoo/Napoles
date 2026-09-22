@@ -230,7 +230,8 @@ export function App() {
     },
   });
 
-  const { sharedMedia, myPeerId, roomSettings, can, amAdmin, canBan, canKick } = liveRoom;
+  const { sharedMedia, myPeerId, roomSettings, can, amAdmin, canBan, canKick, myCaps, myAdminLevel } =
+    liveRoom;
   const isRoomOwner = !joinedExisting && !!currentUserName;
 
   // se eu perder o admin com o painel aberto, fecha o painel e avisa
@@ -408,12 +409,13 @@ export function App() {
         isSpeaking: !isMuted,
         isScreenSharing: profileSharing,
         isCameraOn: isCameraActive,
-        tag: meAdmin && joinedExisting ? 'você • admin' : 'você',
+        tag: meAdmin && joinedExisting ? `você • adm lv${myAdminLevel}` : 'você',
       });
     }
     remotePeersList.forEach((p) => {
       const isRemoteOwner = !!p.sessionId && !!ownerSid && p.sessionId === ownerSid;
       const isRemoteAdmin = !!p.sessionId && admins.includes(p.sessionId);
+      const remoteLv = (p.sessionId && roomSettings.adminLevels?.[p.sessionId]) || 1;
       list.push({
         id: p.peerId,
         name: p.name,
@@ -431,7 +433,7 @@ export function App() {
             : isRemoteOwner
               ? 'dono'
               : isRemoteAdmin
-                ? 'admin'
+                ? `adm lv${remoteLv}`
                 : 'na call',
       });
     });
@@ -447,6 +449,8 @@ export function App() {
     joinedExisting,
     roomSettings.admins,
     roomSettings.ownerSessionId,
+    roomSettings.adminLevels,
+    myAdminLevel,
     liveRoom.mySessionId,
   ]);
 
@@ -1121,6 +1125,7 @@ export function App() {
             sessionIdOf={(pid) => liveRoom.remotePeers[pid]?.sessionId}
             showOwnerCrown={roomSettings.permissions.showOwnerCrown !== false}
             showAdminCrown={roomSettings.permissions.showAdminCrown !== false}
+            adminLevel={myAdminLevel}
           />
         </div>
 
@@ -1265,17 +1270,21 @@ export function App() {
             adminCanKick: 'admins desconectarem pessoas',
             showOwnerCrown: 'coroa do dono',
             showAdminCrown: 'coroa dos admins',
+            adminLv1: 'poderes do ADM LV1 (limite + desconectar)',
+            adminLv2: 'poderes do ADM LV2 (participantes, bans, admins, desconectar)',
+            adminLv3: 'poderes do ADM LV3 (tudo + permissões)',
           };
           const l = labels[key] || key;
+          const who = isRoomOwner ? 'Dono' : `ADM LV${myAdminLevel} ${currentUserName}`;
           if (key === 'showOwnerCrown' || key === 'showAdminCrown') {
-            addSystemMessage(value ? `Dono ativou a ${l}.` : `Dono ocultou a ${l}.`);
-          } else if (key === 'adminCanBan' || key === 'adminCanKick') {
-            addSystemMessage(value ? `Dono liberou ${l}.` : `Dono desativou ${l}.`);
+            addSystemMessage(value ? `${who} ativou a ${l}.` : `${who} ocultou a ${l}.`);
+          } else if (key.startsWith('adminLv') || key === 'adminCanBan' || key === 'adminCanKick') {
+            addSystemMessage(value ? `${who} liberou ${l}.` : `${who} desativou ${l}.`);
           } else {
             addSystemMessage(
               value
-                ? `Dono liberou "${l}" para todos.`
-                : `Dono desativou "${l}" — só dono e admins podem agora.`
+                ? `${who} liberou "${l}" para todos.`
+                : `${who} desativou "${l}" — só dono e admins podem agora.`
             );
           }
         }}
@@ -1304,6 +1313,15 @@ export function App() {
         isOwner={isRoomOwner}
         canBan={canBan}
         canKick={canKick}
+        caps={myCaps}
+        myLevel={myAdminLevel}
+        onSetAdminLevel={(sid, level) => {
+          liveRoom.setAdminLevel(sid, level);
+          const who =
+            participants.find((p) => liveRoom.remotePeers[p.id]?.sessionId === sid)?.name || 'Alguém';
+          addSystemMessage(`${who} agora é ADM LV${level}.`);
+          showToast(`${who} → ADM LV${level}`);
+        }}
       />
 
       <ShareRoomModal

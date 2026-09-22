@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { joinRoom, selfId } from 'trystero';
-import type { ChatMessage, SharedMediaPayload, RoomSettings } from '../types';
-import { DEFAULT_PERMISSIONS } from '../types';
+import type { ChatMessage, SharedMediaPayload, RoomSettings, AdminLevel } from '../types';
+import { DEFAULT_PERMISSIONS, computeAdminCaps } from '../types';
 
 export interface RemotePeerProfile {
   peerId: string;
@@ -170,6 +170,7 @@ export function useLiveRoom({
   const makeDefaultSettings = (): RoomSettings => ({
     permissions: { ...DEFAULT_PERMISSIONS },
     admins: [],
+    adminLevels: {},
     banned: [],
     maxParticipants: 0,
     ownerSessionId: isOwner ? MY_SESSION_ID : '',
@@ -326,24 +327,34 @@ export function useLiveRoom({
         if (!isOwnerRef.current) return; // só o dono processa
         const bySid = String(data.bySid || remotePeersRef.current[peerId]?.sessionId || '');
         const s = roomSettingsRef.current;
-        // quem pediu precisa ser admin e a permissão de banir precisa estar ligada
-        if (!bySid || !s.admins.includes(bySid) || !s.permissions.adminCanBan) return;
+        if (!bySid || !s.admins.includes(bySid)) return;
+        // capacidades de quem pediu (pelo nível + toggles ligados)
+        const caps = computeAdminCaps(s, bySid, false);
+        const byLv: AdminLevel = (s.adminLevels?.[bySid] as AdminLevel) || 1;
         const targetSid = String(data.targetSid || '');
-        if (!targetSid || targetSid === MY_SESSION_ID) return;
+        const by = String(data.by || 'admin');
+
+        const apply = (next: RoomSettings) => {
+          const bumped: RoomSettings = { ...next, version: (s.version || 0) + 1 };
+          roomSettingsRef.current = bumped;
+          setRoomSettings(bumped);
+          broadcastSettingsRef.current?.();
+          [300, 1200].forEach((ms) => setTimeout(() => broadcastSettingsRef.current?.(), ms));
+        };
+
+        // ninguém mexe no dono
+        if (targetSid && targetSid === MY_SESSION_ID) return;
+
         if (data.kind === 'ban') {
+          if (!caps.ban || !targetSid) return;
           const name = String(data.targetName || 'Convidado');
-          const by = String(data.by || 'admin');
-          const bumped: RoomSettings = {
+          apply({
             ...s,
             admins: s.admins.filter((a) => a !== targetSid),
             banned: s.banned.some((b) => b.sessionId === targetSid)
               ? s.banned
               : [...s.banned, { sessionId: targetSid, name, bannedAt: Date.now(), by }],
-            version: (s.version || 0) + 1,
-          };
-          roomSettingsRef.current = bumped;
-          setRoomSettings(bumped);
-          // tira da minha lista também
+          });
           setRemotePeers((prev) => {
             const next = { ...prev };
             Object.keys(next).forEach((pid) => {
@@ -356,18 +367,42 @@ export function useLiveRoom({
             gone.forEach((st) => stopAudioFor(st.key));
             return prev.filter((st) => !gone.includes(st));
           });
-          broadcastSettingsRef.current?.();
-          [300, 1200].forEach((ms) => setTimeout(() => broadcastSettingsRef.current?.(), ms));
         } else if (data.kind === 'unban') {
-          const bumped: RoomSettings = {
+          if (!caps.ban || !targetSid) return;
+          apply({ ...s, banned: s.banned.filter((b) => b.sessionId !== targetSid) });
+        } else if (data.kind === 'setMax') {
+          if (!caps.limit) return;
+          const max = Math.max(0, Math.floor(Number(data.max) || 0));
+          apply({ ...s, maxParticipants: max });
+        } else if (data.kind === 'toggleAdmin') {
+          if (!caps.admins || !targetSid || targetSid === bySid) return;
+          const has = s.admins.includes(targetSid);
+          // admin não remove alguém de nível maior que o dele
+          const targetLv: AdminLevel = (s.adminLevels?.[targetSid] as AdminLevel) || 1;
+          if (has && targetLv > byLv) return;
+          const levels = { ...(s.adminLevels || {}) };
+          if (has) delete levels[targetSid];
+          else levels[targetSid] = 1;
+          apply({
             ...s,
-            banned: s.banned.filter((b) => b.sessionId !== targetSid),
-            version: (s.version || 0) + 1,
-          };
-          roomSettingsRef.current = bumped;
-          setRoomSettings(bumped);
-          broadcastSettingsRef.current?.();
-          [300, 1200].forEach((ms) => setTimeout(() => broadcastSettingsRef.current?.(), ms));
+            admins: has ? s.admins.filter((a) => a !== targetSid) : [...s.admins, targetSid],
+            adminLevels: levels,
+          });
+        } else if (data.kind === 'setAdminLevel') {
+          if (!caps.admins || !targetSid || targetSid === bySid) return;
+          const lv = (Math.min(3, Math.max(1, Math.floor(Number(data.level) || 1))) as AdminLevel);
+          if (lv > byLv) return; // não dá nível acima do próprio
+          apply({
+            ...s,
+            admins: s.admins.includes(targetSid) ? s.admins : [...s.admins, targetSid],
+            adminLevels: { ...(s.adminLevels || {}), [targetSid]: lv },
+          });
+        } else if (data.kind === 'setPermission') {
+          if (!caps.permissions) return;
+          const key = String(data.key || '') as keyof RoomSettings['permissions'];
+          const locked = ['adminLv1', 'adminLv2', 'adminLv3', 'showOwnerCrown'];
+          if (!key || locked.includes(key) || !(key in s.permissions)) return;
+          apply({ ...s, permissions: { ...s.permissions, [key]: !!data.value } });
         }
       };
     } catch {}
@@ -386,6 +421,7 @@ export function useLiveRoom({
       const fresh: RoomSettings = {
         permissions: { ...DEFAULT_PERMISSIONS },
         admins: [],
+        adminLevels: {},
         banned: [],
         maxParticipants: 0,
         ownerSessionId: '',
@@ -424,6 +460,8 @@ export function useLiveRoom({
         const next: RoomSettings = {
           permissions: { ...DEFAULT_PERMISSIONS, ...(incoming.permissions || {}) },
           admins: Array.isArray(incoming.admins) ? incoming.admins : [],
+          adminLevels:
+            incoming.adminLevels && typeof incoming.adminLevels === 'object' ? incoming.adminLevels : {},
           banned: Array.isArray(incoming.banned) ? incoming.banned : [],
           maxParticipants: Number(incoming.maxParticipants || 0),
           ownerSessionId: String(incoming.ownerSessionId || ''),
@@ -1125,29 +1163,91 @@ export function useLiveRoom({
     return bumped;
   }, []);
 
+  /** capacidades minhas AGORA (dono = tudo; admin = pelo nível + toggles) */
+  const myCapsNow = () => computeAdminCaps(roomSettingsRef.current, MY_SESSION_ID, isOwnerRef.current);
+
+  /** admin manda um pedido pro dono aplicar (o dono valida o nível antes). */
+  const sendAdminReq = (payload: Record<string, unknown>) => {
+    try {
+      actionsRef.current?.adminReq?.send({
+        ...payload,
+        by: profileRef.current.userName,
+        bySid: MY_SESSION_ID,
+        ts: Date.now(),
+      });
+    } catch {}
+  };
+
   const setPermission = useCallback(
     (key: keyof RoomSettings['permissions'], value: boolean) => {
-      if (!isOwnerRef.current) return;
-      pushSettings((s) => ({ ...s, permissions: { ...s.permissions, [key]: value } }));
+      if (isOwnerRef.current) {
+        pushSettings((s) => ({ ...s, permissions: { ...s.permissions, [key]: value } }));
+        return;
+      }
+      // LV3 pode mexer em permissões — MENOS nos toggles de nível/coroa do dono (só dono)
+      const locked: Array<keyof RoomSettings['permissions']> = ['adminLv1', 'adminLv2', 'adminLv3', 'showOwnerCrown'];
+      if (myCapsNow().permissions && !locked.includes(key)) {
+        sendAdminReq({ kind: 'setPermission', key, value });
+      }
     },
     [pushSettings]
   );
 
   const setMaxParticipants = useCallback(
     (max: number) => {
-      if (!isOwnerRef.current) return;
-      pushSettings((s) => ({ ...s, maxParticipants: Math.max(0, Math.floor(max || 0)) }));
+      const clean = Math.max(0, Math.floor(max || 0));
+      if (isOwnerRef.current) {
+        pushSettings((s) => ({ ...s, maxParticipants: clean }));
+        return;
+      }
+      if (myCapsNow().limit) sendAdminReq({ kind: 'setMax', max: clean });
     },
     [pushSettings]
   );
 
   const toggleAdmin = useCallback(
     (sessionId: string) => {
-      if (!isOwnerRef.current || !sessionId) return;
-      pushSettings((s) => {
-        const has = s.admins.includes(sessionId);
-        return { ...s, admins: has ? s.admins.filter((a) => a !== sessionId) : [...s.admins, sessionId] };
-      });
+      if (!sessionId) return;
+      if (sessionId === roomSettingsRef.current.ownerSessionId) return; // dono não é "admin"
+      if (isOwnerRef.current) {
+        pushSettings((s) => {
+          const has = s.admins.includes(sessionId);
+          const levels = { ...(s.adminLevels || {}) };
+          if (has) delete levels[sessionId];
+          else levels[sessionId] = 1;
+          return {
+            ...s,
+            admins: has ? s.admins.filter((a) => a !== sessionId) : [...s.admins, sessionId],
+            adminLevels: levels,
+          };
+        });
+        return;
+      }
+      // LV2/LV3 podem gerenciar admins (nunca a si mesmos, nunca o dono)
+      if (myCapsNow().admins && sessionId !== MY_SESSION_ID) {
+        sendAdminReq({ kind: 'toggleAdmin', targetSid: sessionId });
+      }
+    },
+    [pushSettings]
+  );
+
+  /** Define o nível (1|2|3) de um admin. Dono direto; LV2/LV3 pedem (só pra níveis ≤ o próprio). */
+  const setAdminLevel = useCallback(
+    (sessionId: string, level: AdminLevel) => {
+      if (!sessionId) return;
+      const lv = (Math.min(3, Math.max(1, Math.floor(level))) as AdminLevel) || 1;
+      if (isOwnerRef.current) {
+        pushSettings((s) => ({
+          ...s,
+          admins: s.admins.includes(sessionId) ? s.admins : [...s.admins, sessionId],
+          adminLevels: { ...(s.adminLevels || {}), [sessionId]: lv },
+        }));
+        return;
+      }
+      const myLv = (roomSettingsRef.current.adminLevels?.[MY_SESSION_ID] as AdminLevel) || 1;
+      if (myCapsNow().admins && sessionId !== MY_SESSION_ID && lv <= myLv) {
+        sendAdminReq({ kind: 'setAdminLevel', targetSid: sessionId, level: lv });
+      }
     },
     [pushSettings]
   );
@@ -1195,8 +1295,8 @@ export function useLiveRoom({
         return;
       }
 
-      // ADMIN com permissão: manda o kick direto (todos obedecem) + pede ao dono pra registrar o ban
-      if (isAdminSession(MY_SESSION_ID) && roomSettingsRef.current.permissions.adminCanBan) {
+      // ADMIN com poder de banir (toggle antigo OU nível LV2/LV3): kick direto + dono registra
+      if (myCapsNow().ban) {
         try {
           actionsRef.current?.kick?.send({
             target: targetPeerId,
@@ -1227,10 +1327,7 @@ export function useLiveRoom({
     (targetPeerId: string, targetName: string) => {
       const sid = remotePeersRef.current[targetPeerId]?.sessionId;
       if (sid && sid === roomSettingsRef.current.ownerSessionId) return targetName;
-      const allowed =
-        isOwnerRef.current ||
-        (isAdminSession(MY_SESSION_ID) && roomSettingsRef.current.permissions.adminCanKick);
-      if (!allowed) return targetName;
+      if (!myCapsNow().kick) return targetName;
       try {
         actionsRef.current?.kick?.send({
           target: targetPeerId,
@@ -1251,7 +1348,7 @@ export function useLiveRoom({
         pushSettings((s) => ({ ...s, banned: s.banned.filter((b) => b.sessionId !== sessionId) }));
         return;
       }
-      if (isAdminSession(MY_SESSION_ID) && roomSettingsRef.current.permissions.adminCanBan) {
+      if (myCapsNow().ban) {
         try {
           actionsRef.current?.adminReq?.send({
             kind: 'unban',
@@ -1279,11 +1376,17 @@ export function useLiveRoom({
     []
   );
 
+  /** minhas capacidades de gerência (reativo) */
+  const myCaps = computeAdminCaps(roomSettings, MY_SESSION_ID, isOwner);
+  const myAdminLevel: AdminLevel = isOwner
+    ? 3
+    : ((roomSettings.adminLevels?.[MY_SESSION_ID] as AdminLevel) || 1);
   /** admin com poder de banir? */
-  const canBan = isOwner || (amAdmin && !!roomSettings.permissions.adminCanBan);
+  const canBan = myCaps.ban;
   /** admin com poder de expulsar? */
-  const canKick = isOwner || (amAdmin && !!roomSettings.permissions.adminCanKick);
+  const canKick = myCaps.kick;
   void amAdminNow;
+  void isAdminSession;
 
   const broadcastMedia = useCallback((media: SharedMediaPayload) => {
     setSharedMedia(media);
@@ -1338,9 +1441,12 @@ export function useLiveRoom({
     can,
     canBan,
     canKick,
+    myCaps,
+    myAdminLevel,
     setPermission,
     setMaxParticipants,
     toggleAdmin,
+    setAdminLevel,
     banPeer,
     kickAsAdmin,
     unbanSession,

@@ -35,6 +35,8 @@ interface LeftSidebarProps {
   canKick?: boolean;
   showOwnerCrown?: boolean;
   showAdminCrown?: boolean;
+  /** nível do admin (1..3) pra mostrar no botão */
+  adminLevel?: 1 | 2 | 3;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -52,6 +54,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   canKick,
   showOwnerCrown = true,
   showAdminCrown = true,
+  adminLevel = 1,
 }) => {
   const manageVisible = canManage ?? isOwner;
   const kickVisible = canKick ?? isOwner;
@@ -212,7 +215,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           >
             <Crown className={`w-4 h-4 ${isOwner ? 'text-yellow-400' : 'text-amber-300'}`} />
             <Settings className="w-3.5 h-3.5" />
-            {isOwner ? 'Gerenciar sala' : 'Gerenciar sala (admin)'}
+            {isOwner ? 'Gerenciar sala' : `Gerenciar sala (ADM LV${adminLevel})`}
           </button>
         )}
 

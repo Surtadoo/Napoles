@@ -18,9 +18,9 @@ import {
   UserX,
   Shield,
 } from 'lucide-react';
-import type { Participant, RoomSettings, RoomPermissions } from '../types';
+import type { Participant, RoomSettings, RoomPermissions, AdminCaps, AdminLevel } from '../types';
 
-type Screen = 'menu' | 'admins' | 'limit' | 'bans' | 'permissions' | 'kick';
+type Screen = 'menu' | 'admins' | 'limit' | 'bans' | 'permissions' | 'kick' | 'participants';
 
 interface ManageRoomModalProps {
   isOpen: boolean;
@@ -39,6 +39,11 @@ interface ManageRoomModalProps {
   isOwner: boolean;
   canBan: boolean;
   canKick: boolean;
+  /** capacidades calculadas pelo nível (admin) */
+  caps: AdminCaps;
+  /** meu nível (dono = 3) */
+  myLevel: AdminLevel;
+  onSetAdminLevel: (sessionId: string, level: AdminLevel) => void;
 }
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
@@ -78,6 +83,23 @@ const PERMISSION_ROWS: {
   // ---- poderes dos administradores ----
   { key: 'adminCanBan', label: 'Permitir que administradores banam pessoas', icon: <Ban className="w-4 h-4 text-red-400" />, section: 'Poderes dos administradores' },
   { key: 'adminCanKick', label: 'Permitir que administradores desconectem pessoas da call', icon: <UserX className="w-4 h-4 text-orange-400" /> },
+  // ---- níveis de admin ----
+  {
+    key: 'adminLv1',
+    label: 'Permitir que ADM LV1 mexa em: Limite de participantes e Desconectar da call',
+    icon: <span className="text-[10px] font-black text-sky-300">LV1</span>,
+    section: 'Níveis de administrador',
+  },
+  {
+    key: 'adminLv2',
+    label: 'Permitir que ADM LV2 mexa em: Participantes, Banimentos, Gerenciar administradores e Desconectar da call',
+    icon: <span className="text-[10px] font-black text-violet-300">LV2</span>,
+  },
+  {
+    key: 'adminLv3',
+    label: 'Permitir que ADM LV3 mexa em: Participantes, Banimentos, Gerenciar administradores, Desconectar da call e Gerenciar permissões',
+    icon: <span className="text-[10px] font-black text-amber-300">LV3</span>,
+  },
   // ---- coroas ----
   { key: 'showOwnerCrown', label: 'Mostrar a coroa do administrador principal (dono)', icon: <Crown className="w-4 h-4 text-yellow-400" />, section: 'Coroas' },
   { key: 'showAdminCrown', label: 'Mostrar a coroa de quem virou administrador', icon: <Crown className="w-4 h-4 text-amber-300" /> },
@@ -100,6 +122,9 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
   isOwner,
   canBan,
   canKick,
+  caps,
+  myLevel,
+  onSetAdminLevel,
 }) => {
   const [screen, setScreen] = useState<Screen>('menu');
 
@@ -112,8 +137,20 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
   // admin não pode mexer no dono; dono não aparece como alvo pra ninguém
   const others = participants.filter((p) => p.id !== 'current-user' && !p.isOwner);
   const limitLabel = settings.maxParticipants > 0 ? `${settings.maxParticipants} pessoas` : 'sem limite';
-  const showBans = isOwner || canBan;
-  const showKick = isOwner || canKick;
+  // abas visíveis = dono tudo; admin conforme nível/toggles
+  const showAdmins = isOwner || caps.admins;
+  const showLimit = isOwner || caps.limit;
+  const showBans = isOwner || canBan || caps.ban;
+  const showKick = isOwner || canKick || caps.kick;
+  const showPerms = isOwner || caps.permissions;
+  const showParticipants = isOwner || caps.participants;
+  const levelOf = (sid?: string): AdminLevel =>
+    (sid && (settings.adminLevels?.[sid] as AdminLevel)) || 1;
+  const LEVEL_STYLE: Record<AdminLevel, string> = {
+    1: 'bg-sky-500/20 text-sky-200 border-sky-500/40',
+    2: 'bg-violet-500/20 text-violet-200 border-violet-500/40',
+    3: 'bg-amber-500/20 text-amber-200 border-amber-500/40',
+  };
 
   const Header = ({ title, back }: { title: string; back?: boolean }) => (
     <div className="p-4 border-b border-[#212a3d] flex items-center justify-between gap-2">
@@ -172,16 +209,35 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
         {/* ---------- MENU ---------- */}
         {screen === 'menu' && (
           <>
-            <Header title={isOwner ? 'Gerenciar sala' : 'Gerenciar sala (admin)'} />
+            <Header
+              title={
+                isOwner
+                  ? 'Gerenciar sala'
+                  : `Gerenciar sala (ADM LV${myLevel})`
+              }
+            />
             <div className="p-3 space-y-2">
-              {isOwner && (
+              {showParticipants && (
+                <MenuRow
+                  icon={<Users className="w-4 h-4 text-emerald-400" />}
+                  label="Participantes"
+                  right={<span className="text-xs text-gray-400">{participants.length} na sala</span>}
+                  onClick={() => setScreen('participants')}
+                />
+              )}
+              {showAdmins && (
                 <MenuRow
                   icon={<Crown className="w-4 h-4 text-yellow-400" />}
                   label="Gerenciar administradores"
+                  right={
+                    settings.admins.length > 0 ? (
+                      <span className="text-xs text-gray-400">{settings.admins.length}</span>
+                    ) : undefined
+                  }
                   onClick={() => setScreen('admins')}
                 />
               )}
-              {isOwner && (
+              {showLimit && (
                 <MenuRow
                   icon={<Users className="w-4 h-4 text-sky-400" />}
                   label="Limite de participantes"
@@ -211,19 +267,95 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
                   onClick={() => setScreen('kick')}
                 />
               )}
-              {isOwner && (
+              {showPerms && (
                 <MenuRow
                   icon={<Settings className="w-4 h-4 text-gray-300" />}
                   label="Gerenciar permissões"
                   onClick={() => setScreen('permissions')}
                 />
               )}
-              {!isOwner && !showBans && !showKick && (
+              {!isOwner && !showBans && !showKick && !showLimit && !showAdmins && !showPerms && !showParticipants && (
                 <p className="text-xs text-gray-500 text-center py-6 px-3">
-                  Você é administrador, mas o dono ainda não liberou nenhum poder de gerência
-                  (banir / desconectar). Você já ignora as permissões desligadas.
+                  Você é ADM LV{myLevel}, mas o dono desligou os poderes do seu nível.
+                  Você ainda ignora as permissões desativadas (mic, tela, chat…).
                 </p>
               )}
+              {!isOwner && (
+                <p className="text-[10px] text-gray-500 text-center pt-2 px-3">
+                  Seu nível: <b className="text-gray-300">ADM LV{myLevel}</b> · o dono define o nível
+                  e o que cada nível pode fazer.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ---------- PARTICIPANTES ---------- */}
+        {screen === 'participants' && (
+          <>
+            <Header title="Participantes" back />
+            <div className="p-4 space-y-2 overflow-y-auto">
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Todo mundo na sala agora ({participants.length}).
+              </p>
+              {participants.map((p) => {
+                const sid = p.id === 'current-user' ? undefined : sessionIdOf(p.id);
+                const isAdm = p.isAdmin || (!!sid && settings.admins.includes(sid));
+                return (
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[#161a22] border border-[#232c3f]"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img src={p.avatar} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-gray-100 truncate flex items-center gap-1">
+                          {p.name}
+                          {p.isOwner && <Crown className="w-3 h-3 text-yellow-400" />}
+                          {!p.isOwner && isAdm && <Shield className="w-3 h-3 text-amber-300" />}
+                        </p>
+                        <p className="text-[10px] text-gray-500">
+                          {p.isOwner
+                            ? 'Dono da sala'
+                            : isAdm
+                              ? `ADM LV${levelOf(sid)}`
+                              : p.id === 'current-user'
+                                ? 'Você'
+                                : 'Participante'}
+                          {p.isScreenSharing ? ' · transmitindo' : p.isCameraOn ? ' · câmera' : ''}
+                          {p.isMuted ? ' · mudo' : ''}
+                        </p>
+                      </div>
+                    </div>
+                    {p.id !== 'current-user' && !p.isOwner && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {showKick && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`Desconectar ${p.name} da call?`)) onKick?.(p.id, p.name);
+                            }}
+                            className="p-1.5 rounded-lg bg-orange-600/15 text-orange-300 border border-orange-500/30 touch-manipulation"
+                            title="Desconectar"
+                          >
+                            <UserX className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {showBans && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`Banir ${p.name}?`)) onBan(p.id, p.name);
+                            }}
+                            className="p-1.5 rounded-lg bg-red-600/15 text-red-300 border border-red-500/30 touch-manipulation"
+                            title="Banir"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
@@ -274,9 +406,26 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
             <Header title="Gerenciar administradores" back />
             <div className="p-4 space-y-3 overflow-y-auto">
               <p className="text-xs text-gray-400 leading-relaxed">
-                Administradores podem fazer tudo mesmo com as permissões desligadas (menos gerenciar a
-                sala).
+                Administradores ignoram as permissões desligadas. O <b>nível</b> define o que cada um
+                pode gerenciar:
               </p>
+              <div className="grid grid-cols-3 gap-1.5 text-[10px] leading-snug">
+                <div className={`p-2 rounded-lg border ${LEVEL_STYLE[1]}`}>
+                  <b>LV1</b>
+                  <br />
+                  Limite · Desconectar
+                </div>
+                <div className={`p-2 rounded-lg border ${LEVEL_STYLE[2]}`}>
+                  <b>LV2</b>
+                  <br />
+                  Participantes · Bans · Admins · Desconectar
+                </div>
+                <div className={`p-2 rounded-lg border ${LEVEL_STYLE[3]}`}>
+                  <b>LV3</b>
+                  <br />
+                  Tudo do LV2 + Permissões
+                </div>
+              </div>
               {others.length === 0 ? (
                 <p className="text-xs text-gray-500 text-center py-6">
                   Ninguém mais na sala ainda.
@@ -286,40 +435,69 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
                   {others.map((p) => {
                     const sid = sessionIdOf(p.id);
                     const isAdmin = !!sid && settings.admins.includes(sid);
+                    const lv = levelOf(sid);
+                    // admin não gerencia alguém de nível maior que o dele
+                    const locked = !isOwner && isAdmin && lv > myLevel;
                     return (
                       <div
                         key={p.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[#161a22] border border-[#232c3f]"
+                        className="p-2 rounded-xl bg-[#161a22] border border-[#232c3f] space-y-2"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <img src={p.avatar} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-gray-100 truncate flex items-center gap-1">
-                              {p.name}
-                              {isAdmin && <Shield className="w-3 h-3 text-yellow-400" />}
-                            </p>
-                            <p className="text-[10px] text-gray-500">
-                              {isAdmin ? 'Administrador' : 'Participante'}
-                            </p>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img src={p.avatar} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-gray-100 truncate flex items-center gap-1">
+                                {p.name}
+                                {isAdmin && <Shield className="w-3 h-3 text-yellow-400" />}
+                              </p>
+                              <p className="text-[10px] text-gray-500">
+                                {isAdmin ? (
+                                  <span className={`px-1.5 py-0.5 rounded border font-bold ${LEVEL_STYLE[lv]}`}>
+                                    ADM LV{lv}
+                                  </span>
+                                ) : (
+                                  'Participante'
+                                )}
+                              </p>
+                            </div>
                           </div>
+                          <button
+                            disabled={!sid || locked}
+                            onClick={() => sid && onToggleAdmin(sid)}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold touch-manipulation disabled:opacity-40 ${
+                              isAdmin
+                                ? 'bg-red-500/15 text-red-300 border border-red-500/30'
+                                : 'bg-[#232838] text-gray-200 border border-[#2f3850] hover:bg-[#2a3045]'
+                            }`}
+                          >
+                            {isAdmin ? 'Tirar admin' : 'Tornar admin'}
+                          </button>
                         </div>
-                        <button
-                          disabled={!sid}
-                          onClick={() => sid && onToggleAdmin(sid)}
-                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold touch-manipulation disabled:opacity-40 ${
-                            isAdmin
-                              ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40'
-                              : 'bg-[#232838] text-gray-200 border border-[#2f3850] hover:bg-[#2a3045]'
-                          }`}
-                        >
-                          {isAdmin ? (
-                            <span className="flex items-center gap-1">
-                              <Check className="w-3 h-3" /> Admin
-                            </span>
-                          ) : (
-                            'Tornar admin'
-                          )}
-                        </button>
+                        {isAdmin && sid && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-gray-500 shrink-0">Nível:</span>
+                            {([1, 2, 3] as AdminLevel[]).map((n) => {
+                              const active = lv === n;
+                              const canSet = isOwner || (!locked && n <= myLevel);
+                              return (
+                                <button
+                                  key={n}
+                                  disabled={!canSet}
+                                  onClick={() => onSetAdminLevel(sid, n)}
+                                  className={`flex-1 py-1 rounded-md text-[11px] font-bold border touch-manipulation disabled:opacity-30 ${
+                                    active
+                                      ? LEVEL_STYLE[n]
+                                      : 'bg-[#10141d] text-gray-400 border-[#232c3f] hover:text-gray-200'
+                                  }`}
+                                >
+                                  {active && <Check className="w-3 h-3 inline mr-0.5" />}
+                                  LV{n}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -442,27 +620,43 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
                 Ao desativar uma opção, só o dono e os administradores da sala continuam podendo
                 fazer aquilo.
               </p>
-              {PERMISSION_ROWS.map((row) => (
-                <React.Fragment key={row.key}>
-                  {row.section && (
-                    <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-4 pb-1">
-                      {row.section}
-                    </p>
-                  )}
-                  <div className="flex items-center justify-between gap-3 py-3 border-b border-[#1f2636] last:border-0">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-8 h-8 rounded-lg bg-[#1b1f28] border border-[#2a3145] flex items-center justify-center text-gray-300 shrink-0">
-                        {row.icon}
-                      </span>
-                      <span className="text-[13px] text-gray-100 leading-snug">{row.label}</span>
+              {PERMISSION_ROWS.map((row) => {
+                // só o DONO mexe nos níveis de admin e na própria coroa
+                const ownerOnly = ['adminLv1', 'adminLv2', 'adminLv3', 'showOwnerCrown'].includes(row.key);
+                const disabled = !isOwner && ownerOnly;
+                return (
+                  <React.Fragment key={row.key}>
+                    {row.section && (
+                      <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-4 pb-1">
+                        {row.section}
+                      </p>
+                    )}
+                    <div
+                      className={`flex items-center justify-between gap-3 py-3 border-b border-[#1f2636] last:border-0 ${
+                        disabled ? 'opacity-50' : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="w-8 h-8 rounded-lg bg-[#1b1f28] border border-[#2a3145] flex items-center justify-center text-gray-300 shrink-0">
+                          {row.icon}
+                        </span>
+                        <span className="text-[13px] text-gray-100 leading-snug">
+                          {row.label}
+                          {disabled && (
+                            <span className="block text-[10px] text-gray-500">só o dono altera</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className={disabled ? 'pointer-events-none' : ''}>
+                        <Toggle
+                          on={!!settings.permissions[row.key]}
+                          onChange={(v) => !disabled && onSetPermission(row.key, v)}
+                        />
+                      </div>
                     </div>
-                    <Toggle
-                      on={!!settings.permissions[row.key]}
-                      onChange={(v) => onSetPermission(row.key, v)}
-                    />
-                  </div>
-                </React.Fragment>
-              ))}
+                  </React.Fragment>
+                );
+              })}
             </div>
           </>
         )}
