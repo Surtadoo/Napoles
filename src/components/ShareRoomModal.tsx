@@ -8,6 +8,8 @@ interface ShareRoomModalProps {
   roomCode: string;
   shareUrl: string;
   onRegenerateCode: () => void;
+  roomPassword?: string;
+  isPrivate?: boolean;
 }
 
 export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
@@ -16,6 +18,8 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   roomCode,
   shareUrl,
   onRegenerateCode,
+  roomPassword = '',
+  isPrivate = true,
 }) => {
   const [copied, setCopied] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -73,10 +77,43 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
           <div className="flex items-start gap-2 text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg leading-relaxed">
             <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />
             <span>
-              Mande o <b>link + código</b> para a pessoa. Ela abre o link, digita o nome e o
-              código, e entra na <b>mesma call</b> que você.
+              {isPrivate && roomPassword ? (
+                <>
+                  Mande o <b>link + senha</b>. A pessoa abre o link, digita o nome e a senha, e
+                  entra na <b>mesma call</b> que você.
+                </>
+              ) : (
+                <>
+                  Mande o <b>link</b>. A pessoa abre, digita o nome e entra na <b>mesma call</b>{' '}
+                  que você (sala pública, sem senha).
+                </>
+              )}
             </span>
           </div>
+
+          {isPrivate && roomPassword && (
+            <div className="bg-yellow-500/10 p-3 rounded-xl border border-yellow-500/30 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Lock className="w-4 h-4 text-yellow-400 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs text-yellow-100 font-semibold">Senha da sala</p>
+                  <p className="text-[11px] text-yellow-200/70">Quem entrar pelo link precisa digitar</p>
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(roomPassword);
+                  } catch {}
+                }}
+                className="font-mono text-sm font-bold text-yellow-200 bg-black/40 px-3 py-1.5 rounded-md border border-yellow-500/30 touch-manipulation flex items-center gap-1.5 shrink-0"
+                title="Copiar senha"
+              >
+                {roomPassword}
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           <div>
             <label className="text-xs text-gray-300 font-semibold mb-1.5 flex items-center gap-1.5">
@@ -102,8 +139,8 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
               <div className="flex items-center gap-2">
                 <Lock className="w-4 h-4 text-yellow-400" />
                 <div>
-                  <p className="text-xs text-gray-200 font-semibold">Código de acesso</p>
-                  <p className="text-[11px] text-gray-500">A pessoa digita ao entrar</p>
+                  <p className="text-xs text-gray-200 font-semibold">Código da sala</p>
+                  <p className="text-[11px] text-gray-500">Identifica a sala (já vai no link)</p>
                 </div>
               </div>
               <button
@@ -153,7 +190,9 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
 
           <div className="grid grid-cols-2 gap-2">
             <a
-              href={`https://api.whatsapp.com/send?text=${encodeURIComponent(`Entra na minha call no LiveDC! Link: ${shareUrl} | Código: ${roomCode}`)}`}
+              href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+                `Entra na minha call no LiveDC! Link: ${shareUrl}${isPrivate && roomPassword ? ` | Senha: ${roomPassword}` : ''}`
+              )}`}
               target="_blank"
               rel="noreferrer"
               className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 text-[#25D366] border border-[#25D366]/40 text-xs font-semibold flex items-center justify-center touch-manipulation"
@@ -161,7 +200,9 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
               WhatsApp
             </a>
             <a
-              href={`https://telegram.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(`Entra na minha call! Código: ${roomCode}`)}`}
+              href={`https://telegram.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(
+                `Entra na minha call!${isPrivate && roomPassword ? ` Senha: ${roomPassword}` : ''}`
+              )}`}
               target="_blank"
               rel="noreferrer"
               className="py-2.5 px-3 rounded-xl bg-[#0088cc]/20 text-[#4db8ff] border border-[#0088cc]/40 text-xs font-semibold flex items-center justify-center touch-manipulation"

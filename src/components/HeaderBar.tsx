@@ -34,6 +34,7 @@ interface HeaderBarProps {
   onShareRoom: () => void;
   onOpenProModal: () => void;
   onOpenMenu: () => void;
+  onHome?: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -55,6 +56,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onShareRoom,
   onOpenProModal,
   onOpenMenu,
+  onHome,
 }) => {
   return (
     <header className="bg-[#14181f] border-b border-[#212734] px-2 sm:px-4 py-1.5 flex flex-col gap-1.5 shrink-0 select-none">
@@ -62,8 +64,9 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
           <button
-            title="Início"
-            className="p-1.5 text-gray-400 hover:text-white hover:bg-[#1f2635] rounded-md shrink-0"
+            title="Início (grupos e salas)"
+            onClick={onHome}
+            className="p-1.5 text-gray-400 hover:text-white hover:bg-[#1f2635] rounded-md shrink-0 touch-manipulation"
           >
             <Home className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>

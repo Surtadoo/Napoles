@@ -9,6 +9,18 @@ import { SettingsModal } from './components/SettingsModal';
 import { BetaMediaModal, BetaMediaInput } from './components/BetaMediaModal';
 import { MobileScreenShareModal } from './components/MobileScreenShareModal';
 import { ManageRoomModal } from './components/ManageRoomModal';
+import { LobbyScreen, type CreateRoomInput } from './components/LobbyScreen';
+import {
+  loadRecentRooms,
+  saveRecentRoom,
+  removeRecentRoom,
+  loadGroups,
+  loadPublicRooms,
+  savePublicRoom,
+  findSavedRoom,
+  type RecentRoom,
+  type LobbyGroup,
+} from './utils/lobby';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
@@ -19,6 +31,8 @@ import { useLiveRoom } from './hooks/useLiveRoom';
 import {
   generateRoomCode,
   getRoomCodeFromUrl,
+  getRoomMetaFromUrl,
+  hashPassword,
   buildShareUrl,
   persistRoomCodeInUrl,
   avatarForName,
@@ -32,20 +46,39 @@ export function App() {
 
   // Detecta se abriu por link de convite (tem ?room= na URL inicial) — lido UMA vez, na carga
   const [initialInviteCode] = useState<string | null>(() => getRoomCodeFromUrl());
+  // tipo/nome/senha(hash) da sala que veio no link
+  const [inviteMeta] = useState(() => getRoomMetaFromUrl());
 
-  // roomCode só é DEFINIDO quando a pessoa confirma o nome (evita conectar em sala errada).
+  // roomCode só é DEFINIDO quando a pessoa entra numa sala (evita conectar em sala errada).
   // '' = ainda não entrou.
   const [roomCode, setRoomCode] = useState<string>('');
   // true quando a pessoa entrou numa sala existente (link OU código digitado) → não é dona
   const [joinedExisting, setJoinedExisting] = useState<boolean>(false);
-  const [roomName] = useState('Time_do_Sky');
-  const [isPrivate] = useState(true);
+  const [roomName, setRoomName] = useState('Time_do_Sky');
+  const [isPrivate, setIsPrivate] = useState(true);
+  const [roomPassword, setRoomPassword] = useState('');
+
+  // Lobby (aparece depois do nome, quando NÃO veio por link)
+  const [isLobbyOpen, setIsLobbyOpen] = useState(false);
+  const [recentRooms, setRecentRooms] = useState<RecentRoom[]>(() => loadRecentRooms());
+  const [publicRooms, setPublicRooms] = useState<RecentRoom[]>(() => loadPublicRooms());
+  const [groups] = useState<LobbyGroup[]>(() => loadGroups());
+
+  const roomMeta = useMemo(
+    () => ({
+      type: (isPrivate ? 'private' : 'public') as 'public' | 'private',
+      name: roomName,
+      password: roomPassword,
+    }),
+    [isPrivate, roomName, roomPassword]
+  );
 
   useEffect(() => {
-    if (roomCode) persistRoomCodeInUrl(roomCode);
-  }, [roomCode]);
+    if (roomCode) persistRoomCodeInUrl(roomCode, roomMeta);
+  }, [roomCode, roomMeta]);
 
-  const shareUrl = useMemo(() => buildShareUrl(roomCode), [roomCode]);
+  // link leva: código + tipo + nome + hash da senha (privada) → quem abre já sabe o que pedir
+  const shareUrl = useMemo(() => buildShareUrl(roomCode, roomMeta), [roomCode, roomMeta]);
 
   // mobile tabs
   const [mobileTab, setMobileTab] = useState<'video' | 'participants' | 'chat'>('video');
@@ -489,37 +522,115 @@ export function App() {
     showToast(next ? 'Som da sala silenciado para você.' : 'Som da sala ativado.');
   };
 
-  const handleUserJoin = (userName: string, chosenCode: string) => {
-    // Regra: código digitado > código do link > sala nova.
-    // O roomCode só é definido AQUI, então o hook conecta direto na sala certa.
-    const typed = (chosenCode || '').trim();
-    const enteredExisting = typed !== '';
-    const finalCode = typed || initialInviteCode || generateRoomCode();
-
-    setRoomCode(finalCode);
-    setJoinedExisting(enteredExisting || !!initialInviteCode);
+  /** Entra de fato numa sala (conecta o P2P). Usado pelo link, código e lobby. */
+  const enterRoom = (
+    userName: string,
+    code: string,
+    opts: {
+      name?: string;
+      type?: 'public' | 'private';
+      password?: string;
+      visible?: boolean;
+      asOwner: boolean;
+      via: 'link' | 'code' | 'create' | 'lobby';
+    }
+  ) => {
+    const label = opts.name || `Sala ${code}`;
+    const type: 'public' | 'private' = opts.type || 'private';
+    setRoomName(label);
+    setIsPrivate(type !== 'public');
+    setRoomPassword(opts.password || '');
+    setRoomCode(code);
+    setJoinedExisting(!opts.asOwner);
     setCurrentUserName(userName);
     setIsNameModalOpen(false);
+    setIsLobbyOpen(false);
 
-    const cameFromLink = !!initialInviteCode && finalCode === initialInviteCode;
-    const switchedRoom = !!initialInviteCode && finalCode !== initialInviteCode;
+    // só salva nas "recentes" as salas que EU criei (com visibilidade escolhida).
+    // Salas onde só entrei não entram na lista.
+    if (opts.asOwner) {
+      saveRecentRoom({
+        name: label,
+        code,
+        type,
+        password: opts.password || '',
+        visible: opts.visible !== false,
+        createdByMe: true,
+      });
+      setRecentRooms(loadRecentRooms());
+      if (type === 'public' && opts.visible !== false) {
+        savePublicRoom({ name: label, code });
+        setPublicRooms(loadPublicRooms());
+      }
+    }
 
     setTimeout(() => {
       addSystemMessage(
-        switchedRoom
-          ? `${userName} entrou na call ${finalCode} pelo código (diferente do link).`
-          : cameFromLink
-            ? `${userName} entrou na call ${finalCode} pelo link.`
-            : enteredExisting
-              ? `${userName} entrou na call ${finalCode} pelo código.`
-              : `${userName} criou a sala ${finalCode}. Copie o link para chamar amigos.`
+        opts.via === 'link'
+          ? `${userName} entrou na call ${code} pelo link.`
+          : opts.via === 'code'
+            ? `${userName} entrou na call ${code} pelo código.`
+            : opts.via === 'create'
+              ? `${userName} criou a sala "${label}" (${code}) ${type === 'private' ? '🔒 privada' : '🌐 pública'}. Copie o link para chamar amigos.`
+              : `${userName} entrou em "${label}" (${code}).`
       );
       showToast(
-        enteredExisting || cameFromLink
-          ? `Bem-vindo à call ${finalCode}, ${userName}!`
-          : `Bem-vindo, ${userName}! Toque em Convidar para chamar.`
+        opts.via === 'create'
+          ? `Sala "${label}" criada! Toque em Convidar para chamar.`
+          : `Bem-vindo à call ${code}, ${userName}!`
       );
     }, 300);
+  };
+
+  const handleUserJoin = (userName: string, password: string) => {
+    // veio por link → entra direto na sala do link (senha já foi validada no modal)
+    if (initialInviteCode) {
+      enterRoom(userName, initialInviteCode, {
+        name: inviteMeta.name || undefined,
+        type: inviteMeta.type,
+        password: password || '',
+        asOwner: false,
+        via: 'link',
+      });
+      return;
+    }
+    // sem link → mostra o LOBBY (grupos, recentes, criar sala)
+    setCurrentUserName(userName);
+    setIsNameModalOpen(false);
+    setIsLobbyOpen(true);
+  };
+
+  const handleLobbyCreate = (input: CreateRoomInput) => {
+    enterRoom(currentUserName, input.code, {
+      name: input.name,
+      type: input.type,
+      password: input.password,
+      visible: input.visible,
+      asOwner: true,
+      via: 'create',
+    });
+  };
+
+  const handleLobbyJoin = (code: string, name?: string) => {
+    // se for uma sala que EU criei, reentro como dono (com a senha/tipo salvos)
+    const saved = findSavedRoom(code);
+    if (saved?.createdByMe) {
+      enterRoom(currentUserName, code, {
+        name: saved.name,
+        type: saved.type,
+        password: saved.password || '',
+        visible: saved.visible !== false,
+        asOwner: true,
+        via: 'lobby',
+      });
+      return;
+    }
+    enterRoom(currentUserName, code, { name, asOwner: false, via: 'lobby' });
+  };
+
+  const handleRemoveRecent = (code: string) => {
+    removeRecentRoom(code);
+    setRecentRooms(loadRecentRooms());
   };
 
   const handleStartScreenShare = async () => {
@@ -771,12 +882,11 @@ export function App() {
     addSystemMessage('A transmissão foi encerrada.');
   };
 
-  /** Sai da call de verdade: fecha tela/câmera/mic, avisa a sala e volta ao início. */
-  const handleLeaveCall = () => {
+  /** Fecha minhas mídias + avisa a sala que saí. */
+  const teardownCall = () => {
     try {
       if (isRecording) handleStopRecording();
     } catch {}
-    // para minhas mídias locais
     try {
       streamState.stream?.getTracks().forEach((t) => t.stop());
     } catch {}
@@ -785,18 +895,62 @@ export function App() {
     } catch {}
     try {
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
     } catch {}
     try {
       if (localBetaFileUrl) URL.revokeObjectURL(localBetaFileUrl);
     } catch {}
+    setLocalBetaFileUrl(null);
     // avisa todo mundo que saí (nome some da lista + transmissão fecha nos outros)
     try {
       liveRoom.leaveRoom();
     } catch {}
-    // dá tempo do sinal sair antes de recarregar
+  };
+
+  /** Sai da call de verdade (botão vermelho): fecha tudo e recarrega no início. */
+  const handleLeaveCall = () => {
+    teardownCall();
     setTimeout(() => {
       window.location.href = window.location.pathname;
     }, 350);
+  };
+
+  /** Casinha: sai da call e volta pra tela LiveDC (lobby) SEM recarregar. */
+  const handleGoHome = () => {
+    if (!currentUserName) return;
+    if (roomCode) {
+      if (!confirm('Voltar ao início do LiveDC? Você vai sair desta call.')) return;
+      teardownCall();
+    }
+    // reseta o estado da sala (o hook desconecta porque roomCode fica vazio)
+    setStreamState({
+      type: 'none',
+      stream: null,
+      videoUrl: undefined,
+      title: 'Ninguém está transmitindo ainda.',
+      quality: streamQuality,
+      isSharing: false,
+      isPaused: false,
+    });
+    setCameraStream(null);
+    setIsCameraActive(false);
+    setIsMuted(true);
+    setIsDeafened(false);
+    setMessages([]);
+    setRoomCode('');
+    setJoinedExisting(false);
+    setRoomPassword('');
+    setWasKicked(false);
+    setExitReason(null);
+    // limpa o ?room= da URL pra não reentrar sozinho
+    try {
+      const u = new URL(window.location.href);
+      ['room', 't', 'n', 'k'].forEach((p) => u.searchParams.delete(p));
+      window.history.replaceState({}, '', u.toString());
+    } catch {}
+    setRecentRooms(loadRecentRooms());
+    setPublicRooms(loadPublicRooms());
+    setIsLobbyOpen(true);
   };
 
   const handleStartRecording = () => {
@@ -882,6 +1036,24 @@ export function App() {
         isOpen={isNameModalOpen}
         onJoin={handleUserJoin}
         invitedRoomCode={initialInviteCode}
+        invitedRoomName={inviteMeta.name}
+        invitedRoomType={inviteMeta.type}
+        expectedPwHash={inviteMeta.pwHash}
+        hashPassword={hashPassword}
+      />
+      <LobbyScreen
+        isOpen={isLobbyOpen && !isNameModalOpen}
+        userName={currentUserName}
+        recentRooms={recentRooms}
+        groups={groups}
+        publicRooms={publicRooms}
+        onCreateRoom={handleLobbyCreate}
+        onJoinRoom={handleLobbyJoin}
+        onRemoveRecent={handleRemoveRecent}
+        onChangeName={() => {
+          setIsLobbyOpen(false);
+          setIsNameModalOpen(true);
+        }}
       />
       <HeaderBar
         roomName={streamerMode ? 'Sala_Oculta' : roomName}
@@ -906,6 +1078,7 @@ export function App() {
         onShareRoom={() => setIsShareModalOpen(true)}
         onOpenProModal={() => setIsProModalOpen(true)}
         onOpenMenu={() => setIsSettingsModalOpen(true)}
+        onHome={handleGoHome}
       />
 
       {/* desktop: 3 colunas | mobile: 1 painel por vez */}
@@ -1094,6 +1267,8 @@ export function App() {
         roomCode={roomCode}
         shareUrl={shareUrl}
         onRegenerateCode={handleRegenerateCode}
+        roomPassword={isPrivate ? roomPassword : ''}
+        isPrivate={isPrivate}
       />
 
       <SettingsModal
