@@ -16,11 +16,16 @@ import {
   removeRecentRoom,
   loadGroups,
   loadPublicRooms,
+  loadPrivateRooms,
   savePublicRoom,
   findSavedRoom,
+  syncFromBundledFile,
+  updateRoomLocation,
   type RecentRoom,
   type LobbyGroup,
 } from './utils/lobby';
+import { locateMe, prefetchLocation } from './utils/geo';
+import { useRoomDirectory } from './hooks/useRoomDirectory';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
@@ -62,7 +67,68 @@ export function App() {
   const [isLobbyOpen, setIsLobbyOpen] = useState(false);
   const [recentRooms, setRecentRooms] = useState<RecentRoom[]>(() => loadRecentRooms());
   const [publicRooms, setPublicRooms] = useState<RecentRoom[]>(() => loadPublicRooms());
-  const [groups] = useState<LobbyGroup[]>(() => loadGroups());
+  const [privateRooms, setPrivateRooms] = useState<RecentRoom[]>(() => loadPrivateRooms());
+  const [groups, setGroups] = useState<LobbyGroup[]>(() => loadGroups());
+
+  /** recarrega todas as listas a partir do arquivo de salas */
+  const refreshRoomLists = useCallback(() => {
+    setRecentRooms(loadRecentRooms());
+    setPublicRooms(loadPublicRooms());
+    setPrivateRooms(loadPrivateRooms());
+    setGroups(loadGroups());
+  }, []);
+
+  // DIRETÓRIO GLOBAL (P2P): todo navegador aberto troca a lista de salas públicas/privadas.
+  // É assim que as salas de uma pessoa aparecem pras outras sem precisar de servidor.
+  const roomDirectory = useRoomDirectory({
+    enabled: true,
+    onUpdated: refreshRoomLists,
+  });
+
+  // Ao abrir o site: puxa o livedc-rooms.json publicado junto e mescla com o local.
+  // Assim, levando o site pra outro lugar, as salas/grupos já vêm salvos.
+  useEffect(() => {
+    let alive = true;
+    syncFromBundledFile()
+      .then(() => {
+        if (alive) refreshRoomLists();
+      })
+      .catch(() => {});
+    // já descobre a localização por IP em segundo plano (sem pedir permissão),
+    // pra que ao criar a sala o ponto no mapa saia na hora no lugar certo
+    prefetchLocation();
+    return () => {
+      alive = false;
+    };
+  }, [refreshRoomLists]);
+
+  /**
+   * Marca a sala no mapa com a localização REAL de quem criou.
+   * 1) IP (cidade certa, instantâneo) → salva já.
+   * 2) GPS em paralelo (mais preciso, pede permissão) → se vier, refina o ponto.
+   */
+  const tagRoomWithMyLocation = useCallback(
+    (code: string) => {
+      locateMe()
+        .then((p) => {
+          if (!p) return;
+          updateRoomLocation(code, p.lat, p.lng, p.place);
+          refreshRoomLists();
+          roomDirectory.publishNow(); // espalha a posição pros outros
+        })
+        .catch(() => {});
+      locateMe({ preferGps: true })
+        .then((p) => {
+          if (!p || p.source !== 'gps') return;
+          updateRoomLocation(code, p.lat, p.lng, p.place);
+          refreshRoomLists();
+          roomDirectory.publishNow();
+        })
+        .catch(() => {});
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [refreshRoomLists, roomDirectory.publishNow]
+  );
 
   const roomMeta = useMemo(
     () => ({
@@ -568,23 +634,43 @@ export function App() {
     setIsNameModalOpen(false);
     setIsLobbyOpen(false);
 
-    // só salva nas "recentes" as salas que EU criei (com visibilidade escolhida).
-    // Salas onde só entrei não entram na lista.
+    // Salva no arquivo de salas.
+    // - Criei (dono): entra em "Salas recentes" e nas listas pública/privada + mapa (se visível).
+    // - Só entrei: fica no arquivo (aparece na lista pública/privada e no mapa), mas não em "recentes".
+    const existing = findSavedRoom(code);
     if (opts.asOwner) {
       saveRecentRoom({
         name: label,
         code,
         type,
         password: opts.password || '',
+        // hash viaja pro diretório (a senha em si nunca sai deste navegador)
+        pwHash: type === 'private' && opts.password ? hashPassword(opts.password) : undefined,
         visible: opts.visible !== false,
         createdByMe: true,
+        createdBy: userName,
       });
-      setRecentRooms(loadRecentRooms());
-      if (type === 'public' && opts.visible !== false) {
-        savePublicRoom({ name: label, code });
-        setPublicRooms(loadPublicRooms());
+      if (type === 'public' && opts.visible !== false) savePublicRoom({ name: label, code });
+      // ponto no mapa = localização real do criador (só na criação; ao reentrar mantém)
+      if (opts.via === 'create' || !(typeof existing?.lat === 'number' && typeof existing?.lng === 'number')) {
+        tagRoomWithMyLocation(code);
       }
+    } else if (!existing) {
+      saveRecentRoom({
+        name: label,
+        code,
+        type,
+        // só guardo a senha se eu digitei uma válida (facilita reentrar)
+        password: type === 'private' && opts.password ? opts.password : undefined,
+        visible: true,
+        createdByMe: false,
+      });
+    } else if (type === 'private' && opts.password && !existing.password) {
+      saveRecentRoom({ ...existing, password: opts.password });
     }
+    refreshRoomLists();
+    // sala nova/alterada → manda pro diretório agora (todo mundo online recebe)
+    roomDirectory.publishNow();
 
     setTimeout(() => {
       addSystemMessage(
@@ -633,7 +719,7 @@ export function App() {
     });
   };
 
-  const handleLobbyJoin = (code: string, name?: string) => {
+  const handleLobbyJoin = (code: string, name?: string, password?: string) => {
     // se for uma sala que EU criei, reentro como dono (com a senha/tipo salvos)
     const saved = findSavedRoom(code);
     if (saved?.createdByMe) {
@@ -647,13 +733,21 @@ export function App() {
       });
       return;
     }
-    enterRoom(currentUserName, code, { name, asOwner: false, via: 'lobby' });
+    enterRoom(currentUserName, code, {
+      name: name || saved?.name,
+      type: saved?.type || (password ? 'private' : undefined),
+      password: password || saved?.password || '',
+      asOwner: false,
+      via: 'lobby',
+    });
   };
 
   const handleRemoveRecent = (code: string) => {
     removeRecentRoom(code);
-    setRecentRooms(loadRecentRooms());
+    refreshRoomLists();
   };
+
+
 
   const handleStartScreenShare = async () => {
     if (!can('screen')) {
@@ -690,38 +784,51 @@ export function App() {
       // 30fps em 4K/1080p reduz MUITO o delay (o encoder não aguenta 60fps em alta
       // resolução e começa a atrasar depois de alguns segundos). Quem quer 60 escolhe.
       const fps = want60 ? { ideal: 60, max: 60 } : { ideal: 30, max: 30 };
-      // cursor: 'never' = não captura o mouse (evita "vários cursores" ao ver a própria
-      // transmissão dentro da transmissão). Quem assiste vê a tela limpa.
-      const cursorOpt = { cursor: 'never' as const, displaySurface: 'monitor' as const };
-      const mediaStream: MediaStream = await nav.mediaDevices.getDisplayMedia({
-        video: want4k
-          ? {
-              ...cursorOpt,
-              width: { ideal: 3840, max: 3840 },
-              height: { ideal: 2160, max: 2160 },
-              frameRate: fps,
-            }
-          : want1080
-            ? {
-                ...cursorOpt,
-                width: { ideal: 1920, max: 1920 },
-                height: { ideal: 1080, max: 1080 },
-                frameRate: fps,
-              }
-            : { ...cursorOpt, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          // áudio do sistema sem processamento = menos atraso
-          sampleRate: 48000,
-        },
-        // evita capturar a própria aba (loop infinito de tela dentro de tela)
-        selfBrowserSurface: 'exclude',
-        surfaceSwitching: 'include',
-        systemAudio: 'include',
-        preferCurrentTab: false,
-      } as any);
+
+      let mediaStream: MediaStream;
+
+      if (isMobileDevice) {
+        // CELULAR (Android Chrome/Samsung/Edge): a API existe, mas rejeita as opções
+        // de desktop (displaySurface, selfBrowserSurface, systemAudio, áudio de sistema).
+        // Pede o MÍNIMO — só vídeo — e o Android abre o seletor "Tela inteira".
+        try {
+          mediaStream = await nav.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: 30, max: 30 } },
+            audio: false,
+          });
+        } catch (e1: any) {
+          if (e1?.name === 'NotAllowedError' || e1?.name === 'AbortError') throw e1;
+          // alguns Androids só aceitam `video: true` puro
+          mediaStream = await nav.mediaDevices.getDisplayMedia({ video: true });
+        }
+      } else {
+        // DESKTOP: qualidade alta + sem cursor + exclui a própria aba + áudio do sistema
+        const cursorOpt = { cursor: 'never' as const, displaySurface: 'monitor' as const };
+        const desktopOpts: any = {
+          video: want4k
+            ? { ...cursorOpt, width: { ideal: 3840, max: 3840 }, height: { ideal: 2160, max: 2160 }, frameRate: fps }
+            : want1080
+              ? { ...cursorOpt, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 }, frameRate: fps }
+              : { ...cursorOpt, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            sampleRate: 48000,
+          },
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include',
+          systemAudio: 'include',
+          preferCurrentTab: false,
+        };
+        try {
+          mediaStream = await nav.mediaDevices.getDisplayMedia(desktopOpts);
+        } catch (e1: any) {
+          if (e1?.name === 'NotAllowedError' || e1?.name === 'AbortError') throw e1;
+          // navegador antigo (Firefox/Safari) não aceita as opções extras → tenta simples
+          mediaStream = await nav.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        }
+      }
       const videoTrack = mediaStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => handleStopSharing();
@@ -773,8 +880,20 @@ export function App() {
       }
     } catch (err: unknown) {
       const error = err as Error;
-      if (error?.name === 'NotAllowedError') showToast('Compartilhamento cancelado.');
-      else showToast('Não foi possível compartilhar a tela aqui. Tente a câmera.');
+      if (error?.name === 'NotAllowedError' || error?.name === 'AbortError') {
+        showToast('Compartilhamento cancelado.');
+      } else if (isMobileDevice) {
+        // iPhone/Safari não tem captura de tela via navegador (limite da Apple)
+        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        showToast(
+          isIOS
+            ? 'O iPhone não deixa capturar a tela pelo navegador (limite da Apple). Use a Câmera traseira.'
+            : 'Seu navegador não conseguiu capturar a tela. Use o Chrome atualizado ou a Câmera traseira.'
+        );
+        setIsMobileShareOpen(true);
+      } else {
+        showToast('Não foi possível compartilhar a tela aqui. Tente a câmera.');
+      }
     }
   };
 
@@ -969,8 +1088,7 @@ export function App() {
       ['room', 't', 'n', 'k'].forEach((p) => u.searchParams.delete(p));
       window.history.replaceState({}, '', u.toString());
     } catch {}
-    setRecentRooms(loadRecentRooms());
-    setPublicRooms(loadPublicRooms());
+    refreshRoomLists();
     setIsLobbyOpen(true);
   };
 
@@ -1068,6 +1186,7 @@ export function App() {
         recentRooms={recentRooms}
         groups={groups}
         publicRooms={publicRooms}
+        privateRooms={privateRooms}
         onCreateRoom={handleLobbyCreate}
         onJoinRoom={handleLobbyJoin}
         onRemoveRecent={handleRemoveRecent}

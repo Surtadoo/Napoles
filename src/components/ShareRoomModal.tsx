@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Copy, Check, Lock, ShieldCheck, Share2, Link2, RefreshCw } from 'lucide-react';
+import { hashPassword } from '../utils/room';
 
 interface ShareRoomModalProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
+  const pwHash = roomPassword ? hashPassword(roomPassword) : '';
 
   if (!isOpen) return null;
 
@@ -113,6 +115,26 @@ export const ShareRoomModal: React.FC<ShareRoomModalProps> = ({
                 <Copy className="w-3.5 h-3.5" />
               </button>
             </div>
+          )}
+
+          {isPrivate && roomPassword && pwHash && (
+            <button
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(pwHash);
+                } catch {}
+              }}
+              className="w-full text-left bg-[#0d1017] border border-[#27344c] rounded-xl px-3 py-2 flex items-center justify-between gap-2 touch-manipulation"
+              title="Copiar pwHash (pra fixar a sala no livedc-rooms.json)"
+            >
+              <span className="min-w-0">
+                <span className="block text-[10px] uppercase tracking-wide text-gray-500 font-bold">
+                  pwHash (pra fixar no arquivo livedc-rooms.json)
+                </span>
+                <span className="block font-mono text-[11px] text-gray-300 truncate">{pwHash}</span>
+              </span>
+              <Copy className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+            </button>
           )}
 
           <div>

@@ -1,0 +1,17 @@
+{
+  "_comentario": "ARQUIVO DE SALAS FIXAS DO LIVEDC. Tudo que estiver aqui aparece pra TODO MUNDO que abrir o site (públicas, privadas e grupos). Edite manualmente e publique. Salas criadas pelas pessoas no dia a dia se espalham pelo diretório P2P; se quiser fixá-las pra sempre, copie pra cá. Campos: name, code (6 dígitos), type (public|private), pwHash (só privada — hash da senha, veja o painel de gerência), lat/lng/place (posição no mapa), createdBy, visible.",
+  "version": 1,
+  "updatedAt": 0,
+  "rooms": [],
+  "groups": [
+    {
+      "id": "g-rapazes",
+      "name": "Os rapazes",
+      "role": "Membro",
+      "members": 19,
+      "online": 6,
+      "code": "190619",
+      "emoji": "🎮"
+    }
+  ]
+}

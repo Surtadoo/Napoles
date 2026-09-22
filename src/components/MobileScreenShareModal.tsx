@@ -43,7 +43,8 @@ export const MobileScreenShareModal: React.FC<MobileScreenShareModalProps> = ({
             <span>
               <span className="block text-xs font-bold text-emerald-200">Tela do celular</span>
               <span className="block text-[11px] text-gray-400">
-                Funciona no Android / Chrome. No iPhone use a câmera.
+                Android (Chrome/Samsung): vai abrir "Compartilhar tela inteira" → toque em{' '}
+                <b className="text-gray-200">Iniciar agora</b>. Depois volte pro navegador.
               </span>
             </span>
           </button>
