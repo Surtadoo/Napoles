@@ -29,6 +29,12 @@ interface LeftSidebarProps {
   onManageRoom?: () => void;
   adminSessionIds?: string[];
   sessionIdOf?: (participantId: string) => string | undefined;
+  /** dono OU admin → vê o botão "Gerenciar sala" */
+  canManage?: boolean;
+  /** pode desconectar pessoas (dono sempre; admin só com permissão) */
+  canKick?: boolean;
+  showOwnerCrown?: boolean;
+  showAdminCrown?: boolean;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -42,7 +48,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onManageRoom,
   adminSessionIds = [],
   sessionIdOf,
+  canManage,
+  canKick,
+  showOwnerCrown = true,
+  showAdminCrown = true,
 }) => {
+  const manageVisible = canManage ?? isOwner;
+  const kickVisible = canKick ?? isOwner;
   const [showTransformPrompt, setShowTransformPrompt] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
 
@@ -130,13 +142,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     <span className="text-xs font-semibold text-emerald-300 truncate">
                       {user.name}
                     </span>
-                    {user.isOwner && (
+                    {user.isOwner && showOwnerCrown && (
                       <Crown
                         className="w-3.5 h-3.5 text-yellow-400 shrink-0 drop-shadow-[0_0_4px_rgba(250,204,21,0.6)]"
                         aria-label="Dono da sala"
                       />
                     )}
                     {!user.isOwner &&
+                      showAdminCrown &&
                       (user.isAdmin ||
                         (sessionIdOf &&
                           (() => {
@@ -169,7 +182,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 ) : (
                   <Volume2 className="w-3.5 h-3.5 text-gray-400" />
                 )}
-                {isOwner && user.id !== 'current-user' && (
+                {kickVisible && user.id !== 'current-user' && !user.isOwner && (
                   <button
                     onClick={() => {
                       if (confirm(`Desconectar ${user.name} da call?`)) {
@@ -187,15 +200,19 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           ))}
         </div>
 
-        {/* Gerenciar sala — só quem tem a coroa (dono) */}
-        {isOwner && onManageRoom && (
+        {/* Gerenciar sala — dono e administradores (some na hora se tirar o admin) */}
+        {manageVisible && onManageRoom && (
           <button
             onClick={onManageRoom}
-            className="mt-3 w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-yellow-500/15 to-amber-500/10 hover:from-yellow-500/25 hover:to-amber-500/20 border border-yellow-500/40 text-yellow-200 text-xs font-bold flex items-center justify-center gap-2 transition-all touch-manipulation"
+            className={`mt-3 w-full py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all touch-manipulation ${
+              isOwner
+                ? 'bg-gradient-to-r from-yellow-500/15 to-amber-500/10 hover:from-yellow-500/25 hover:to-amber-500/20 border-yellow-500/40 text-yellow-200'
+                : 'bg-gradient-to-r from-amber-500/10 to-orange-500/5 hover:from-amber-500/20 hover:to-orange-500/10 border-amber-500/30 text-amber-200'
+            }`}
           >
-            <Crown className="w-4 h-4 text-yellow-400" />
+            <Crown className={`w-4 h-4 ${isOwner ? 'text-yellow-400' : 'text-amber-300'}`} />
             <Settings className="w-3.5 h-3.5" />
-            Gerenciar sala
+            {isOwner ? 'Gerenciar sala' : 'Gerenciar sala (admin)'}
           </button>
         )}
 

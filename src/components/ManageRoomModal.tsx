@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import type { Participant, RoomSettings, RoomPermissions } from '../types';
 
-type Screen = 'menu' | 'admins' | 'limit' | 'bans' | 'permissions';
+type Screen = 'menu' | 'admins' | 'limit' | 'bans' | 'permissions' | 'kick';
 
 interface ManageRoomModalProps {
   isOpen: boolean;
@@ -34,6 +34,11 @@ interface ManageRoomModalProps {
   onToggleAdmin: (sessionId: string) => void;
   onBan: (participantId: string, name: string) => void;
   onUnban: (sessionId: string) => void;
+  onKick?: (participantId: string, name: string) => void;
+  /** true = dono (vê tudo). false = admin (vê só o que tem permissão) */
+  isOwner: boolean;
+  canBan: boolean;
+  canKick: boolean;
 }
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
@@ -60,6 +65,7 @@ const PERMISSION_ROWS: {
   key: keyof RoomPermissions;
   label: string;
   icon: React.ReactNode;
+  section?: string;
 }[] = [
   { key: 'mic', label: 'Permitir que todos liguem o microfone', icon: <Mic className="w-4 h-4" /> },
   { key: 'screen', label: 'Permitir que todos compartilhem sua tela', icon: <Monitor className="w-4 h-4" /> },
@@ -69,6 +75,12 @@ const PERMISSION_ROWS: {
   { key: 'gifs', label: 'Permitir que todos enviem GIFS', icon: <span className="text-[9px] font-black tracking-tight">GIF</span> },
   { key: 'images', label: 'Permitir que todos enviem imagens', icon: <ImageIcon className="w-4 h-4" /> },
   { key: 'theme', label: 'Permitir que Pro Max troquem o tema da sala', icon: <Palette className="w-4 h-4" /> },
+  // ---- poderes dos administradores ----
+  { key: 'adminCanBan', label: 'Permitir que administradores banam pessoas', icon: <Ban className="w-4 h-4 text-red-400" />, section: 'Poderes dos administradores' },
+  { key: 'adminCanKick', label: 'Permitir que administradores desconectem pessoas da call', icon: <UserX className="w-4 h-4 text-orange-400" /> },
+  // ---- coroas ----
+  { key: 'showOwnerCrown', label: 'Mostrar a coroa do administrador principal (dono)', icon: <Crown className="w-4 h-4 text-yellow-400" />, section: 'Coroas' },
+  { key: 'showAdminCrown', label: 'Mostrar a coroa de quem virou administrador', icon: <Crown className="w-4 h-4 text-amber-300" /> },
 ];
 
 const LIMIT_OPTIONS = [0, 2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 50];
@@ -84,6 +96,10 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
   onToggleAdmin,
   onBan,
   onUnban,
+  onKick,
+  isOwner,
+  canBan,
+  canKick,
 }) => {
   const [screen, setScreen] = useState<Screen>('menu');
 
@@ -93,8 +109,11 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
 
   if (!isOpen) return null;
 
-  const others = participants.filter((p) => p.id !== 'current-user');
+  // admin não pode mexer no dono; dono não aparece como alvo pra ninguém
+  const others = participants.filter((p) => p.id !== 'current-user' && !p.isOwner);
   const limitLabel = settings.maxParticipants > 0 ? `${settings.maxParticipants} pessoas` : 'sem limite';
+  const showBans = isOwner || canBan;
+  const showKick = isOwner || canKick;
 
   const Header = ({ title, back }: { title: string; back?: boolean }) => (
     <div className="p-4 border-b border-[#212a3d] flex items-center justify-between gap-2">
@@ -153,36 +172,98 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
         {/* ---------- MENU ---------- */}
         {screen === 'menu' && (
           <>
-            <Header title="Gerenciar sala" />
+            <Header title={isOwner ? 'Gerenciar sala' : 'Gerenciar sala (admin)'} />
             <div className="p-3 space-y-2">
-              <MenuRow
-                icon={<Crown className="w-4 h-4 text-yellow-400" />}
-                label="Gerenciar administradores"
-                onClick={() => setScreen('admins')}
-              />
-              <MenuRow
-                icon={<Users className="w-4 h-4 text-sky-400" />}
-                label="Limite de participantes"
-                right={<span className="text-xs text-gray-400">{limitLabel}</span>}
-                onClick={() => setScreen('limit')}
-              />
-              <MenuRow
-                icon={<Ban className="w-4 h-4 text-red-400" />}
-                label="Banimentos"
-                right={
-                  settings.banned.length > 0 ? (
-                    <span className="text-xs bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded">
-                      {settings.banned.length}
-                    </span>
-                  ) : undefined
-                }
-                onClick={() => setScreen('bans')}
-              />
-              <MenuRow
-                icon={<Settings className="w-4 h-4 text-gray-300" />}
-                label="Gerenciar permissões"
-                onClick={() => setScreen('permissions')}
-              />
+              {isOwner && (
+                <MenuRow
+                  icon={<Crown className="w-4 h-4 text-yellow-400" />}
+                  label="Gerenciar administradores"
+                  onClick={() => setScreen('admins')}
+                />
+              )}
+              {isOwner && (
+                <MenuRow
+                  icon={<Users className="w-4 h-4 text-sky-400" />}
+                  label="Limite de participantes"
+                  right={<span className="text-xs text-gray-400">{limitLabel}</span>}
+                  onClick={() => setScreen('limit')}
+                />
+              )}
+              {showBans && (
+                <MenuRow
+                  icon={<Ban className="w-4 h-4 text-red-400" />}
+                  label="Banimentos"
+                  right={
+                    settings.banned.length > 0 ? (
+                      <span className="text-xs bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded">
+                        {settings.banned.length}
+                      </span>
+                    ) : undefined
+                  }
+                  onClick={() => setScreen('bans')}
+                />
+              )}
+              {showKick && (
+                <MenuRow
+                  icon={<UserX className="w-4 h-4 text-orange-400" />}
+                  label="Desconectar da call"
+                  right={<span className="text-xs text-gray-400">{others.length} na sala</span>}
+                  onClick={() => setScreen('kick')}
+                />
+              )}
+              {isOwner && (
+                <MenuRow
+                  icon={<Settings className="w-4 h-4 text-gray-300" />}
+                  label="Gerenciar permissões"
+                  onClick={() => setScreen('permissions')}
+                />
+              )}
+              {!isOwner && !showBans && !showKick && (
+                <p className="text-xs text-gray-500 text-center py-6 px-3">
+                  Você é administrador, mas o dono ainda não liberou nenhum poder de gerência
+                  (banir / desconectar). Você já ignora as permissões desligadas.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ---------- DESCONECTAR ---------- */}
+        {screen === 'kick' && (
+          <>
+            <Header title="Desconectar da call" back />
+            <div className="p-4 space-y-3 overflow-y-auto">
+              <p className="text-xs text-gray-400 leading-relaxed">
+                A pessoa sai da call na hora, mas pode entrar de novo pelo link (não é banimento).
+              </p>
+              {others.length === 0 ? (
+                <p className="text-xs text-gray-500 text-center py-6">Ninguém mais na sala.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {others.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[#161a22] border border-[#232c3f]"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <img src={p.avatar} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                        <p className="text-xs font-semibold text-gray-100 truncate flex items-center gap-1">
+                          {p.name}
+                          {p.isAdmin && <Shield className="w-3 h-3 text-amber-300" />}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (confirm(`Desconectar ${p.name} da call?`)) onKick?.(p.id, p.name);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-orange-600/20 text-orange-300 border border-orange-500/40 text-[11px] font-bold flex items-center gap-1 hover:bg-orange-600/30 touch-manipulation"
+                      >
+                        <UserX className="w-3 h-3" /> Desconectar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -362,21 +443,25 @@ export const ManageRoomModal: React.FC<ManageRoomModalProps> = ({
                 fazer aquilo.
               </p>
               {PERMISSION_ROWS.map((row) => (
-                <div
-                  key={row.key}
-                  className="flex items-center justify-between gap-3 py-3 border-b border-[#1f2636] last:border-0"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="w-8 h-8 rounded-lg bg-[#1b1f28] border border-[#2a3145] flex items-center justify-center text-gray-300 shrink-0">
-                      {row.icon}
-                    </span>
-                    <span className="text-[13px] text-gray-100 leading-snug">{row.label}</span>
+                <React.Fragment key={row.key}>
+                  {row.section && (
+                    <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider pt-4 pb-1">
+                      {row.section}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between gap-3 py-3 border-b border-[#1f2636] last:border-0">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="w-8 h-8 rounded-lg bg-[#1b1f28] border border-[#2a3145] flex items-center justify-center text-gray-300 shrink-0">
+                        {row.icon}
+                      </span>
+                      <span className="text-[13px] text-gray-100 leading-snug">{row.label}</span>
+                    </div>
+                    <Toggle
+                      on={!!settings.permissions[row.key]}
+                      onChange={(v) => onSetPermission(row.key, v)}
+                    />
                   </div>
-                  <Toggle
-                    on={!!settings.permissions[row.key]}
-                    onChange={(v) => onSetPermission(row.key, v)}
-                  />
-                </div>
+                </React.Fragment>
               ))}
             </div>
           </>

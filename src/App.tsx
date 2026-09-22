@@ -230,7 +230,21 @@ export function App() {
     },
   });
 
-  const { sharedMedia, myPeerId, roomSettings, can } = liveRoom;
+  const { sharedMedia, myPeerId, roomSettings, can, amAdmin, canBan, canKick } = liveRoom;
+  const isRoomOwner = !joinedExisting && !!currentUserName;
+
+  // se eu perder o admin com o painel aberto, fecha o painel e avisa
+  const wasAdminRef = useRef(false);
+  useEffect(() => {
+    const nowAdmin = isRoomOwner || amAdmin;
+    if (wasAdminRef.current && !nowAdmin) {
+      setIsManageOpen(false);
+      showToast('Você não é mais administrador da sala.');
+    } else if (!wasAdminRef.current && nowAdmin && !isRoomOwner) {
+      showToast('Você virou administrador! Agora tem o botão "Gerenciar sala".');
+    }
+    wasAdminRef.current = nowAdmin;
+  }, [isRoomOwner, amAdmin, showToast]);
   const [isManageOpen, setIsManageOpen] = useState(false);
 
   // mostra aviso quando algo foi bloqueado pelas permissões
@@ -328,15 +342,19 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharedMedia, myPeerId, localBetaFileUrl, currentUserName, addSystemMessage, showToast]);
 
-  // expulsa pessoa da call (dono da sala)
+  // expulsa pessoa da call (dono sempre; admin só com a permissão "desconectar" ligada)
   const handleKickParticipant = useCallback(
     (peerId: string, name: string) => {
-      liveRoom.kickPeer(peerId, name);
+      if (!isRoomOwner && !canKick) {
+        showToast('O dono não liberou "desconectar pessoas" para administradores.');
+        return;
+      }
+      liveRoom.kickAsAdmin(peerId, name);
       addSystemMessage(`${name} foi desconectado da call.`);
       showToast(`${name} foi removido da call.`);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [addSystemMessage, showToast, liveRoom.kickPeer]
+    [addSystemMessage, showToast, liveRoom.kickAsAdmin, isRoomOwner, canKick]
   );
 
   const { remotePeersList, remoteStreams, connectionStatus } = liveRoom;
@@ -915,11 +933,10 @@ export function App() {
     }, 350);
   };
 
-  /** Casinha: sai da call e volta pra tela LiveDC (lobby) SEM recarregar. */
+  /** Casinha: sai da call e volta pra tela LiveDC (lobby) SEM recarregar e sem perguntar. */
   const handleGoHome = () => {
     if (!currentUserName) return;
     if (roomCode) {
-      if (!confirm('Voltar ao início do LiveDC? Você vai sair desta call.')) return;
       teardownCall();
     }
     // reseta o estado da sala (o hook desconecta porque roomCode fica vazio)
@@ -1095,11 +1112,15 @@ export function App() {
             userPoints={userPoints}
             connectionStatus={connectionStatus}
             shareUrl={shareUrl}
-            isOwner={!joinedExisting && !!currentUserName}
+            isOwner={isRoomOwner}
+            canManage={isRoomOwner || amAdmin}
+            canKick={canKick}
             onKickParticipant={handleKickParticipant}
             onManageRoom={() => setIsManageOpen(true)}
             adminSessionIds={roomSettings.admins}
             sessionIdOf={(pid) => liveRoom.remotePeers[pid]?.sessionId}
+            showOwnerCrown={roomSettings.permissions.showOwnerCrown !== false}
+            showAdminCrown={roomSettings.permissions.showAdminCrown !== false}
           />
         </div>
 
@@ -1231,11 +1252,32 @@ export function App() {
         sessionIdOf={(pid) => liveRoom.remotePeers[pid]?.sessionId}
         onSetPermission={(key, value) => {
           liveRoom.setPermission(key, value);
-          addSystemMessage(
-            value
-              ? `Dono liberou "${key}" para todos.`
-              : `Dono desativou "${key}" — só dono e admins podem agora.`
-          );
+          const labels: Record<string, string> = {
+            mic: 'microfone',
+            screen: 'compartilhar tela',
+            camera: 'câmera',
+            videoSource: 'fonte de vídeo (BETA)',
+            chat: 'chat',
+            gifs: 'GIFs',
+            images: 'imagens',
+            theme: 'tema da sala',
+            adminCanBan: 'admins banirem pessoas',
+            adminCanKick: 'admins desconectarem pessoas',
+            showOwnerCrown: 'coroa do dono',
+            showAdminCrown: 'coroa dos admins',
+          };
+          const l = labels[key] || key;
+          if (key === 'showOwnerCrown' || key === 'showAdminCrown') {
+            addSystemMessage(value ? `Dono ativou a ${l}.` : `Dono ocultou a ${l}.`);
+          } else if (key === 'adminCanBan' || key === 'adminCanKick') {
+            addSystemMessage(value ? `Dono liberou ${l}.` : `Dono desativou ${l}.`);
+          } else {
+            addSystemMessage(
+              value
+                ? `Dono liberou "${l}" para todos.`
+                : `Dono desativou "${l}" — só dono e admins podem agora.`
+            );
+          }
         }}
         onSetMaxParticipants={(max) => {
           liveRoom.setMaxParticipants(max);
@@ -1258,6 +1300,10 @@ export function App() {
           liveRoom.unbanSession(sid);
           addSystemMessage(`${who} foi desbanido.`);
         }}
+        onKick={(pid, name) => handleKickParticipant(pid, name)}
+        isOwner={isRoomOwner}
+        canBan={canBan}
+        canKick={canKick}
       />
 
       <ShareRoomModal

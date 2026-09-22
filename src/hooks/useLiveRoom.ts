@@ -191,6 +191,7 @@ export function useLiveRoom({
     media?: any;
     signal?: any;
     settings?: any;
+    adminReq?: any;
   } | null>(null);
   const localStreamsRef = useRef<Map<string, { stream: MediaStream; kind: string }>>(new Map());
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -306,6 +307,8 @@ export function useLiveRoom({
     const signalAction = room.makeAction('livedc-signal-v1');
     // gerência da sala (permissões/admins/banidos/limite) — só o dono envia
     const settingsAction = room.makeAction('livedc-settings-v1');
+    // pedidos de admin (ban/unban) → só o dono executa e registra
+    const adminReqAction = room.makeAction('livedc-adminreq-v1');
     actionsRef.current = {
       profile: profileAction,
       chat: chatAction,
@@ -313,7 +316,61 @@ export function useLiveRoom({
       media: mediaAction,
       signal: signalAction,
       settings: settingsAction,
+      adminReq: adminReqAction,
     };
+
+    try {
+      (adminReqAction as any).onMessage = (data: any, meta: any) => {
+        const peerId = meta?.peerId || (typeof meta === 'string' ? meta : null);
+        if (!data || cancelled || !peerId) return;
+        if (!isOwnerRef.current) return; // só o dono processa
+        const bySid = String(data.bySid || remotePeersRef.current[peerId]?.sessionId || '');
+        const s = roomSettingsRef.current;
+        // quem pediu precisa ser admin e a permissão de banir precisa estar ligada
+        if (!bySid || !s.admins.includes(bySid) || !s.permissions.adminCanBan) return;
+        const targetSid = String(data.targetSid || '');
+        if (!targetSid || targetSid === MY_SESSION_ID) return;
+        if (data.kind === 'ban') {
+          const name = String(data.targetName || 'Convidado');
+          const by = String(data.by || 'admin');
+          const bumped: RoomSettings = {
+            ...s,
+            admins: s.admins.filter((a) => a !== targetSid),
+            banned: s.banned.some((b) => b.sessionId === targetSid)
+              ? s.banned
+              : [...s.banned, { sessionId: targetSid, name, bannedAt: Date.now(), by }],
+            version: (s.version || 0) + 1,
+          };
+          roomSettingsRef.current = bumped;
+          setRoomSettings(bumped);
+          // tira da minha lista também
+          setRemotePeers((prev) => {
+            const next = { ...prev };
+            Object.keys(next).forEach((pid) => {
+              if (next[pid]?.sessionId === targetSid) delete next[pid];
+            });
+            return next;
+          });
+          setRemoteStreams((prev) => {
+            const gone = prev.filter((st) => remotePeersRef.current[st.peerId]?.sessionId === targetSid);
+            gone.forEach((st) => stopAudioFor(st.key));
+            return prev.filter((st) => !gone.includes(st));
+          });
+          broadcastSettingsRef.current?.();
+          [300, 1200].forEach((ms) => setTimeout(() => broadcastSettingsRef.current?.(), ms));
+        } else if (data.kind === 'unban') {
+          const bumped: RoomSettings = {
+            ...s,
+            banned: s.banned.filter((b) => b.sessionId !== targetSid),
+            version: (s.version || 0) + 1,
+          };
+          roomSettingsRef.current = bumped;
+          setRoomSettings(bumped);
+          broadcastSettingsRef.current?.();
+          [300, 1200].forEach((ms) => setTimeout(() => broadcastSettingsRef.current?.(), ms));
+        }
+      };
+    } catch {}
 
     // se sou o dono, garanto que as configs têm meu id/nome
     if (isOwnerRef.current) {
@@ -1095,43 +1152,116 @@ export function useLiveRoom({
     [pushSettings]
   );
 
+  /** Remove localmente um peer (usado por kick/ban). */
+  const dropPeerLocally = useCallback((targetPeerId: string) => {
+    setRemotePeers((prev) => {
+      const next = { ...prev };
+      delete next[targetPeerId];
+      return next;
+    });
+    setRemoteStreams((prev) => {
+      prev.filter((s) => s.peerId === targetPeerId).forEach((s) => stopAudioFor(s.key));
+      return prev.filter((s) => s.peerId !== targetPeerId);
+    });
+  }, []);
+
+  const isAdminSession = (sid: string) => roomSettingsRef.current.admins.includes(sid);
+  const amAdminNow = () => isOwnerRef.current || isAdminSession(MY_SESSION_ID);
+
   const banPeer = useCallback(
     (targetPeerId: string, targetName: string) => {
-      if (!isOwnerRef.current) return;
       const sid = remotePeersRef.current[targetPeerId]?.sessionId || `peer-${targetPeerId}`;
-      pushSettings((s) => ({
-        ...s,
-        admins: s.admins.filter((a) => a !== sid),
-        banned: s.banned.some((b) => b.sessionId === sid)
-          ? s.banned
-          : [...s.banned, { sessionId: sid, name: targetName, bannedAt: Date.now(), by: profileRef.current.userName }],
-      }));
+      // ninguém bane o dono
+      if (sid && sid === roomSettingsRef.current.ownerSessionId) return;
+
+      if (isOwnerRef.current) {
+        pushSettings((s) => ({
+          ...s,
+          admins: s.admins.filter((a) => a !== sid),
+          banned: s.banned.some((b) => b.sessionId === sid)
+            ? s.banned
+            : [...s.banned, { sessionId: sid, name: targetName, bannedAt: Date.now(), by: profileRef.current.userName }],
+        }));
+        try {
+          actionsRef.current?.kick?.send({
+            target: targetPeerId,
+            targetSid: sid,
+            ban: true,
+            by: profileRef.current.userName,
+            ts: Date.now(),
+          });
+        } catch {}
+        dropPeerLocally(targetPeerId);
+        return;
+      }
+
+      // ADMIN com permissão: manda o kick direto (todos obedecem) + pede ao dono pra registrar o ban
+      if (isAdminSession(MY_SESSION_ID) && roomSettingsRef.current.permissions.adminCanBan) {
+        try {
+          actionsRef.current?.kick?.send({
+            target: targetPeerId,
+            targetSid: sid,
+            ban: true,
+            by: profileRef.current.userName,
+            ts: Date.now(),
+          });
+        } catch {}
+        try {
+          actionsRef.current?.adminReq?.send({
+            kind: 'ban',
+            targetSid: sid,
+            targetName,
+            by: profileRef.current.userName,
+            bySid: MY_SESSION_ID,
+            ts: Date.now(),
+          });
+        } catch {}
+        dropPeerLocally(targetPeerId);
+      }
+    },
+    [pushSettings, dropPeerLocally]
+  );
+
+  /** Expulsa (sem banir). Dono sempre pode; admin só com adminCanKick. */
+  const kickAsAdmin = useCallback(
+    (targetPeerId: string, targetName: string) => {
+      const sid = remotePeersRef.current[targetPeerId]?.sessionId;
+      if (sid && sid === roomSettingsRef.current.ownerSessionId) return targetName;
+      const allowed =
+        isOwnerRef.current ||
+        (isAdminSession(MY_SESSION_ID) && roomSettingsRef.current.permissions.adminCanKick);
+      if (!allowed) return targetName;
       try {
         actionsRef.current?.kick?.send({
           target: targetPeerId,
           targetSid: sid,
-          ban: true,
           by: profileRef.current.userName,
           ts: Date.now(),
         });
       } catch {}
-      setRemotePeers((prev) => {
-        const next = { ...prev };
-        delete next[targetPeerId];
-        return next;
-      });
-      setRemoteStreams((prev) => {
-        prev.filter((s) => s.peerId === targetPeerId).forEach((s) => stopAudioFor(s.key));
-        return prev.filter((s) => s.peerId !== targetPeerId);
-      });
+      dropPeerLocally(targetPeerId);
+      return targetName;
     },
-    [pushSettings]
+    [dropPeerLocally]
   );
 
   const unbanSession = useCallback(
     (sessionId: string) => {
-      if (!isOwnerRef.current) return;
-      pushSettings((s) => ({ ...s, banned: s.banned.filter((b) => b.sessionId !== sessionId) }));
+      if (isOwnerRef.current) {
+        pushSettings((s) => ({ ...s, banned: s.banned.filter((b) => b.sessionId !== sessionId) }));
+        return;
+      }
+      if (isAdminSession(MY_SESSION_ID) && roomSettingsRef.current.permissions.adminCanBan) {
+        try {
+          actionsRef.current?.adminReq?.send({
+            kind: 'unban',
+            targetSid: sessionId,
+            by: profileRef.current.userName,
+            bySid: MY_SESSION_ID,
+            ts: Date.now(),
+          });
+        } catch {}
+      }
     },
     [pushSettings]
   );
@@ -1148,6 +1278,12 @@ export function useLiveRoom({
     },
     []
   );
+
+  /** admin com poder de banir? */
+  const canBan = isOwner || (amAdmin && !!roomSettings.permissions.adminCanBan);
+  /** admin com poder de expulsar? */
+  const canKick = isOwner || (amAdmin && !!roomSettings.permissions.adminCanKick);
+  void amAdminNow;
 
   const broadcastMedia = useCallback((media: SharedMediaPayload) => {
     setSharedMedia(media);
@@ -1200,10 +1336,13 @@ export function useLiveRoom({
     roomSettings,
     amAdmin,
     can,
+    canBan,
+    canKick,
     setPermission,
     setMaxParticipants,
     toggleAdmin,
     banPeer,
+    kickAsAdmin,
     unbanSession,
   };
 }

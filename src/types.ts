@@ -46,6 +46,14 @@ export interface RoomPermissions {
   gifs: boolean;
   images: boolean;
   theme: boolean;
+  /** admins podem banir pessoas */
+  adminCanBan: boolean;
+  /** admins podem desconectar (expulsar) pessoas da call */
+  adminCanKick: boolean;
+  /** mostrar a coroa do dono (adm principal) para os outros */
+  showOwnerCrown: boolean;
+  /** mostrar a coroa de quem virou admin para os outros */
+  showAdminCrown: boolean;
 }
 
 export const DEFAULT_PERMISSIONS: RoomPermissions = {
@@ -57,6 +65,10 @@ export const DEFAULT_PERMISSIONS: RoomPermissions = {
   gifs: true,
   images: true,
   theme: true,
+  adminCanBan: false,
+  adminCanKick: false,
+  showOwnerCrown: true,
+  showAdminCrown: true,
 };
 
 export interface BannedEntry {
