@@ -33,33 +33,41 @@ export const MobileScreenShareModal: React.FC<MobileScreenShareModalProps> = ({
         </div>
 
         <div className="p-4 space-y-2">
+          <div className="p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-yellow-300 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-yellow-100 leading-relaxed">
+              Este navegador <b>não tem</b> captura de tela (no iPhone/iPad a Apple bloqueia isso em
+              todos os navegadores). Use a <b>câmera traseira</b> pra mostrar o que quiser, ou abra no{' '}
+              <b>Android com Chrome</b>.
+            </p>
+          </div>
+
           <button
-            onClick={onNativeScreen}
+            onClick={onRearCamera}
             className="w-full p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/50 text-left flex items-center gap-3 active:bg-emerald-500/25 touch-manipulation"
           >
             <span className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center shrink-0">
-              <Monitor className="w-5 h-5 text-emerald-300" />
+              <SwitchCamera className="w-5 h-5 text-emerald-300" />
             </span>
             <span>
-              <span className="block text-xs font-bold text-emerald-200">Tela do celular</span>
+              <span className="block text-xs font-bold text-emerald-200">Câmera traseira</span>
               <span className="block text-[11px] text-gray-400">
-                Android (Chrome/Samsung): vai abrir "Compartilhar tela inteira" → toque em{' '}
-                <b className="text-gray-200">Iniciar agora</b>. Depois volte pro navegador.
+                Aponta pra tela/objeto — todos veem ao vivo em tela grande.
               </span>
             </span>
           </button>
 
           <button
-            onClick={onRearCamera}
+            onClick={onNativeScreen}
             className="w-full p-3 rounded-xl bg-[#10141d] border border-[#242e42] text-left flex items-center gap-3 active:bg-[#182030] touch-manipulation"
           >
             <span className="w-10 h-10 rounded-xl bg-sky-500/15 flex items-center justify-center shrink-0">
-              <SwitchCamera className="w-5 h-5 text-sky-300" />
+              <Monitor className="w-5 h-5 text-sky-300" />
             </span>
             <span>
-              <span className="block text-xs font-bold text-gray-200">Câmera traseira</span>
+              <span className="block text-xs font-bold text-gray-200">Tentar tela mesmo assim</span>
               <span className="block text-[11px] text-gray-400">
-                Recomendado no iPhone — todos veem ao vivo.
+                Se o seu navegador tiver suporte, abre "Iniciar agora".
               </span>
             </span>
           </button>
@@ -79,10 +87,6 @@ export const MobileScreenShareModal: React.FC<MobileScreenShareModalProps> = ({
             </span>
           </button>
 
-          <p className="text-[10px] text-gray-500 flex items-start gap-1.5 pt-1">
-            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            O iPhone (Safari) não permite capturar a tela pelo navegador — é limite da Apple.
-          </p>
         </div>
 
         <div className="p-3 bg-[#0f121a] border-t border-[#1f2636] flex justify-end">

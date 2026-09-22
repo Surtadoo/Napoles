@@ -749,21 +749,39 @@ export function App() {
 
 
 
+  /** O celular tem a API de captura de tela? (iPhone/Safari: não) */
+  const mobileHasScreenCapture = () => {
+    const nav: any = navigator;
+    return !!(nav?.mediaDevices?.getDisplayMedia || nav?.getDisplayMedia);
+  };
+
   const handleStartScreenShare = async () => {
     if (!can('screen')) {
       blockedToast('compartilhar a tela');
       return;
     }
-    // no celular abre o menu com as opções que funcionam (tela/câmera traseira/arquivo)
+    // Captura de tela/câmera SÓ funciona em HTTPS (ou localhost). Em HTTP o navegador
+    // simplesmente não expõe a API — e o botão "não faz nada". Avisa em vez de falhar mudo.
+    if (!window.isSecureContext) {
+      showToast('Abra o site em HTTPS (https://…) — em HTTP o navegador bloqueia a captura de tela.');
+      return;
+    }
+    // CELULAR: a captura de tela SÓ funciona se for chamada DIRETO no toque do usuário.
+    // Abrir um menu antes quebra o "gesto" e o Android ignora sem erro nenhum.
+    // Então: tem API → chama AGORA; não tem (iPhone) → aí sim mostra as alternativas.
     if (isMobileDevice && !streamState.isSharing) {
-      setIsMobileShareOpen(true);
+      if (mobileHasScreenCapture()) {
+        await attemptNativeScreenShare();
+      } else {
+        setIsMobileShareOpen(true);
+      }
       return;
     }
     await attemptNativeScreenShare();
   };
 
   const attemptNativeScreenShare = async () => {
-    setIsMobileShareOpen(false);
+    // NÃO mexe em estado antes de chamar a API (re-render atrasa e perde o gesto)
     try {
       const nav: any = navigator;
       const getDisplay =
@@ -788,19 +806,11 @@ export function App() {
       let mediaStream: MediaStream;
 
       if (isMobileDevice) {
-        // CELULAR (Android Chrome/Samsung/Edge): a API existe, mas rejeita as opções
-        // de desktop (displaySurface, selfBrowserSurface, systemAudio, áudio de sistema).
-        // Pede o MÍNIMO — só vídeo — e o Android abre o seletor "Tela inteira".
-        try {
-          mediaStream = await nav.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 30, max: 30 } },
-            audio: false,
-          });
-        } catch (e1: any) {
-          if (e1?.name === 'NotAllowedError' || e1?.name === 'AbortError') throw e1;
-          // alguns Androids só aceitam `video: true` puro
-          mediaStream = await nav.mediaDevices.getDisplayMedia({ video: true });
-        }
+        // CELULAR (Android Chrome/Samsung/Edge/Firefox):
+        // - chamada tem que ser síncrona com o toque (já garantido em handleStartScreenShare)
+        // - `video: true` puro é o que o Android aceita com mais certeza
+        // - o Android exibe "Iniciar agora" / "Compartilhar tela inteira"
+        mediaStream = await nav.mediaDevices.getDisplayMedia({ video: true, audio: false });
       } else {
         // DESKTOP: qualidade alta + sem cursor + exclui a própria aba + áudio do sistema
         const cursorOpt = { cursor: 'never' as const, displaySurface: 'monitor' as const };
@@ -849,6 +859,8 @@ export function App() {
           }
         } catch {}
       }
+      // captura começou → agora sim pode fechar o menu do celular (se estava aberto)
+      setIsMobileShareOpen(false);
       const activeName = currentUserName || 'Você';
       setStreamState({
         type: 'screen',
