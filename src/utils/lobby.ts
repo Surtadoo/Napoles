@@ -36,6 +36,28 @@ export interface RoomsFile {
   updatedAt: number;
   rooms: RecentRoom[];
   groups: LobbyGroup[];
+  /**
+   * Salas APAGADAS (código → quando). Impede que voltem pelo P2P, pelo banco
+   * (antes do delete propagar) ou pelo livedc-rooms.json.
+   */
+  deleted?: Record<string, number>;
+}
+
+const DELETED_TTL = 1000 * 60 * 60 * 24 * 30; // lembra 30 dias
+
+/** códigos apagados ainda válidos */
+export function getDeletedCodes(): Set<string> {
+  const f = loadFile();
+  const now = Date.now();
+  const out = new Set<string>();
+  Object.entries(f.deleted || {}).forEach(([code, at]) => {
+    if (now - Number(at || 0) < DELETED_TTL) out.add(code);
+  });
+  return out;
+}
+
+export function isDeletedCode(code: string): boolean {
+  return getDeletedCodes().has(code);
 }
 
 const ROOMS_KEY = 'livedc-rooms-file-v2';
@@ -47,7 +69,7 @@ const FILE_NAME = 'livedc-rooms.json';
 // ----------------------------------------------------------------------------
 
 function emptyFile(): RoomsFile {
-  return { version: 1, updatedAt: 0, rooms: [], groups: [] };
+  return { version: 1, updatedAt: 0, rooms: [], groups: [], deleted: {} };
 }
 
 function sanitizeRoom(r: any): RecentRoom | null {
@@ -88,6 +110,13 @@ function sanitizeFile(raw: any): RoomsFile {
           emoji: String(g.emoji || '🎮'),
         }))
     : [];
+  // lista de apagadas (só do espelho local; o arquivo publicado não traz isso)
+  f.deleted = {};
+  if (raw.deleted && typeof raw.deleted === 'object') {
+    Object.entries(raw.deleted).forEach(([code, at]) => {
+      if (/^\d{4,10}$/.test(code)) f.deleted![code] = Number(at) || 0;
+    });
+  }
   return f;
 }
 
@@ -110,10 +139,14 @@ function persistFile(f: RoomsFile) {
   }
 }
 
-/** Mescla salas/grupos de outro arquivo (mais recente vence). */
+/** Mescla salas/grupos de outro arquivo (mais recente vence). Salas apagadas NÃO voltam. */
 function mergeFiles(a: RoomsFile, b: RoomsFile): RoomsFile {
+  const deleted: Record<string, number> = { ...(a.deleted || {}), ...(b.deleted || {}) };
+  const now = Date.now();
+  const isDel = (code: string) => deleted[code] != null && now - deleted[code] < DELETED_TTL;
   const byCode = new Map<string, RecentRoom>();
   [...a.rooms, ...b.rooms].forEach((r) => {
+    if (isDel(r.code)) return;
     const cur = byCode.get(r.code);
     if (!cur || (r.lastJoined || 0) >= (cur.lastJoined || 0)) {
       byCode.set(r.code, { ...cur, ...r, createdByMe: !!(cur?.createdByMe || r.createdByMe) });
@@ -126,6 +159,7 @@ function mergeFiles(a: RoomsFile, b: RoomsFile): RoomsFile {
     updatedAt: Math.max(a.updatedAt, b.updatedAt),
     rooms: [...byCode.values()].sort((x, y) => (y.lastJoined || 0) - (x.lastJoined || 0)).slice(0, 200),
     groups: [...byId.values()],
+    deleted,
   };
 }
 
@@ -225,14 +259,62 @@ export function saveRecentRoom(room: Omit<RecentRoom, 'lastJoined'>) {
 }
 
 /**
+ * Substitui as salas "dos outros" pela lista vinda do BANCO NA NUVEM (fonte da verdade).
+ * As minhas (createdByMe) são mantidas com senha; se sumiram do banco, saem daqui também
+ * (foram apagadas por alguém) — a não ser que sejam minhas.
+ */
+export function replaceFromCloud(cloud: any[]): boolean {
+  const f = loadFile();
+  const deleted = getDeletedCodes();
+  const mine = f.rooms.filter((r) => r.createdByMe && !deleted.has(r.code));
+  const byCode = new Map<string, RecentRoom>();
+  mine.forEach((r) => byCode.set(r.code, r));
+  for (const raw of cloud) {
+    if (!raw || typeof raw.code !== 'string' || !/^\d{4,10}$/.test(raw.code)) continue;
+    // sala que EU apaguei: não volta (o delete no banco pode demorar a propagar)
+    if (deleted.has(raw.code)) continue;
+    const cur = byCode.get(raw.code);
+    const entry: RecentRoom = {
+      name: String(raw.name || `Sala ${raw.code}`).slice(0, 48),
+      code: raw.code,
+      type: raw.type === 'public' ? 'public' : 'private',
+      lastJoined: Number(raw.updatedAt || raw.createdAt || 0),
+      pwHash: raw.pwHash ? String(raw.pwHash) : undefined,
+      lat: typeof raw.lat === 'number' ? raw.lat : undefined,
+      lng: typeof raw.lng === 'number' ? raw.lng : undefined,
+      place: raw.place ? String(raw.place).slice(0, 60) : undefined,
+      createdAt: Number(raw.createdAt || 0) || undefined,
+      createdBy: raw.createdBy ? String(raw.createdBy).slice(0, 24) : undefined,
+      visible: raw.visible !== false,
+      createdByMe: !!cur?.createdByMe,
+      // minha senha em texto fica só aqui
+      password: cur?.password,
+    };
+    // se é minha, mantenho meu lastJoined mais recente
+    if (cur?.createdByMe) entry.lastJoined = Math.max(cur.lastJoined || 0, entry.lastJoined || 0);
+    byCode.set(raw.code, entry);
+  }
+  const next = [...byCode.values()].sort((a, b) => (b.lastJoined || 0) - (a.lastJoined || 0)).slice(0, 500);
+  const changed = JSON.stringify(next) !== JSON.stringify(f.rooms);
+  if (changed) {
+    f.rooms = next;
+    persistFile(f);
+  }
+  return changed;
+}
+
+/**
  * Recebe salas de OUTRAS pessoas (via diretório P2P) e mescla no arquivo local.
  * Nunca sobrescreve senha/createdByMe das minhas. Retorna true se algo mudou.
  */
 export function mergeIncomingRooms(incoming: any[]): boolean {
   const f = loadFile();
+  const deleted = getDeletedCodes();
   let changed = false;
   for (const raw of incoming) {
     if (!raw || typeof raw.code !== 'string' || !/^\d{4,10}$/.test(raw.code)) continue;
+    // apagada por mim → ignora o que vier de outros navegadores
+    if (deleted.has(raw.code)) continue;
     const idx = f.rooms.findIndex((r) => r.code === raw.code);
     const inc: Partial<RecentRoom> = {
       name: String(raw.name || `Sala ${raw.code}`).slice(0, 48),
@@ -339,7 +421,32 @@ export function findSavedRoom(code: string): RecentRoom | undefined {
 export function removeRecentRoom(code: string) {
   const f = loadFile();
   f.rooms = f.rooms.filter((r) => r.code !== code);
+  // marca como apagada → não volta pelo P2P / banco / arquivo publicado
+  f.deleted = { ...(f.deleted || {}), [code]: Date.now() };
   persistFile(f);
+}
+
+/**
+ * Outro navegador avisou que apagou a sala dele. Remove daqui SE não for minha
+ * (ninguém consegue apagar uma sala que EU criei). Retorna true se removeu.
+ */
+export function removeRoomFromOthers(code: string): boolean {
+  const f = loadFile();
+  const r = f.rooms.find((x) => x.code === code);
+  if (!r || r.createdByMe) return false;
+  f.rooms = f.rooms.filter((x) => x.code !== code);
+  f.deleted = { ...(f.deleted || {}), [code]: Date.now() };
+  persistFile(f);
+  return true;
+}
+
+/** Se a pessoa criar de novo uma sala com o mesmo código, tira da lista de apagadas. */
+export function undeleteCode(code: string) {
+  const f = loadFile();
+  if (f.deleted && f.deleted[code] != null) {
+    delete f.deleted[code];
+    persistFile(f);
+  }
 }
 
 /** Busca por nome, código ou lugar. */

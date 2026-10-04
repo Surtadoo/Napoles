@@ -46,14 +46,15 @@ const APP_ID = 'livedc-call-v3-fast';
 
 // Relays em paralelo → descoberta rápida
 const RELAY_URLS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.mostr.pub',
-  'wss://relay.primal.net',
   'wss://nostr.wine',
-  'wss://relay.nostr.band',
+  'wss://relay.primal.net',
   'wss://purplepag.es',
+  'wss://nos.lol',
+  'wss://nostr.bitcoiner.social',
+  'wss://relay.snort.social',
   'wss://nostr.mom',
+  'wss://offchain.pub',
+  'wss://relay.nostr.net',
 ];
 
 const RTC_CONFIG: RTCConfiguration = {
@@ -185,6 +186,8 @@ export function useLiveRoom({
   const broadcastSettingsRef = useRef<((target?: string) => void) | null>(null);
 
   const roomRef = useRef<any>(null);
+  /** promise da saída da sala anterior — o próximo join espera ela terminar */
+  const leavingPromiseRef = useRef<Promise<void> | null>(null);
   const actionsRef = useRef<{
     profile?: any;
     chat?: any;
@@ -281,24 +284,44 @@ export function useLiveRoom({
     setRemoteStreams([]);
     setSharedMedia(null);
 
+    // Espera a saída anterior (se houver) terminar antes de entrar de novo.
+    // O trystero reutiliza a instância enquanto `leave()` não completou (~100ms);
+    // sem isso, StrictMode/remontagem entregava uma sala já fechada.
+    const prevLeaving = leavingPromiseRef.current;
     let room: any = null;
-    try {
-      room = joinRoom(
-        {
-          appId: APP_ID,
-          password: `livedc-${roomCode}`,
-          relayConfig: { urls: RELAY_URLS, redundancy: RELAY_URLS.length } as any,
-          rtcConfig: RTC_CONFIG,
-          trickleIce: true,
-        } as any,
-        `livedc-room-${roomCode}`
-      );
-    } catch (e) {
-      console.error('[LiveDC] join falhou', e);
-      setConnectionStatus('idle');
-      return;
+    const actionsHolder: any = {};
+
+    const doJoin = () => {
+      if (cancelled) return;
+      try {
+        room = joinRoom(
+          {
+            appId: APP_ID,
+            password: `livedc-${roomCode}`,
+            relayConfig: { urls: RELAY_URLS, redundancy: RELAY_URLS.length } as any,
+            rtcConfig: RTC_CONFIG,
+            trickleIce: true,
+          } as any,
+          `livedc-room-${roomCode}`
+        );
+      } catch (e) {
+        console.error('[LiveDC] join falhou', e);
+        setConnectionStatus('idle');
+        return;
+      }
+      roomRef.current = room;
+      setupRoom(room);
+    };
+
+    if (prevLeaving) {
+      prevLeaving.then(doJoin, doJoin);
+    } else {
+      doJoin();
     }
-    roomRef.current = room;
+
+    // eslint-disable-next-line no-inner-declarations
+    function setupRoom(room: any) {
+    void actionsHolder;
 
     const profileAction = room.makeAction('livedc-profile-v4');
     const chatAction = room.makeAction('livedc-chat-v3');
@@ -929,20 +952,43 @@ export function useLiveRoom({
     window.addEventListener('beforeunload', sendLeaveSignal);
     window.addEventListener('pagehide', sendLeaveSignal);
 
+    // guarda tudo que o cleanup precisa
+    actionsHolder.keepAlive = keepAlive;
+    actionsHolder.sendLeaveSignal = sendLeaveSignal;
+    } // fim setupRoom
+
     return () => {
       cancelled = true;
-      clearInterval(keepAlive);
-      window.removeEventListener('beforeunload', sendLeaveSignal);
-      window.removeEventListener('pagehide', sendLeaveSignal);
-      // saindo (troca de sala / desmontou) → avisa antes de fechar
-      sendLeaveSignal();
-      const r = room;
-      setTimeout(() => {
+      if (actionsHolder.keepAlive) clearInterval(actionsHolder.keepAlive);
+      if (actionsHolder.sendLeaveSignal) {
+        window.removeEventListener('beforeunload', actionsHolder.sendLeaveSignal);
+        window.removeEventListener('pagehide', actionsHolder.sendLeaveSignal);
+        // saindo (troca de sala / desmontou) → avisa antes de fechar
         try {
-          r.leave?.();
+          actionsHolder.sendLeaveSignal();
         } catch {}
-      }, 200);
-      if (roomRef.current === room) {
+      }
+      const r = room;
+      if (r) {
+        // sai AGORA e registra a promise: o próximo join espera ela terminar.
+        // (o trystero reutiliza a instância enquanto `leave()` não completou; com o
+        // StrictMode isso entregava uma sala já fechada → ninguém aparecia na call)
+        let p: Promise<any>;
+        try {
+          p = Promise.resolve(r.leave?.());
+        } catch {
+          p = Promise.resolve();
+        }
+        // + pequena folga pro trystero limpar `occupiedRooms` de verdade
+        const wrapped: Promise<void> = p
+          .catch(() => {})
+          .then(() => new Promise<void>((res) => setTimeout(res, 150)))
+          .then(() => {
+            if (leavingPromiseRef.current === wrapped) leavingPromiseRef.current = null;
+          });
+        leavingPromiseRef.current = wrapped;
+      }
+      if (roomRef.current === r) {
         roomRef.current = null;
         actionsRef.current = null;
       }

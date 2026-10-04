@@ -1,33 +1,43 @@
-# Hospedar o LiveDC
+# LiveDC no Cloudflare Pages
 
-Este projeto é um site Vite/React puro, sem `wrangler.jsonc`.
-Use **Cloudflare Pages** (não Workers).
+## Publicar (igual antes)
 
-## Configuração no Cloudflare Pages
+- **Framework:** Vite · **Build:** `npm run build` · **Output:** `dist` · **Root:** `/`
+- Branch de produção: `main`
 
-- **Framework preset:** Vite
-- **Root directory:** `/`
-- **Build command:** `npm run build`
-- **Output directory:** `dist`
-- **Branch de produção:** `main`
+## ⚠️ OBRIGATÓRIO pra todo mundo ver as salas: ligar o banco (KV)
 
-É só conectar o repositório e fazer o deploy. Não precisa de `wrangler deploy`.
+Um site estático não grava arquivo. Então o LiveDC traz uma **API própria** (`functions/api/rooms.ts`)
+que salva as salas num **KV do Cloudflare** — é o "arquivo na nuvem". Grátis. Leva 2 minutos:
 
-## Por que aparecia `dist/wrangler.json` no log?
+1. Cloudflare → **Workers & Pages** → **KV** → **Create a namespace** → nome: `livedc-rooms` → Add
+2. Abra o seu projeto Pages → **Settings** → **Bindings** (ou "Functions") → **Add** → **KV namespace**
+   - Variable name: `LIVEDC_ROOMS` (exatamente assim, maiúsculas)
+   - KV namespace: `livedc-rooms`
+   - Salvar
+3. **Deployments** → **Retry deployment** (ou faça um commit novo) pra ativar o binding.
 
-Aquela mensagem não era erro. O build tinha dado certo (`✓ built in 3.28s`).
+Pronto. No site, o topo do lobby mostra **🟢 Banco online**. A partir daí:
+- toda sala pública/privada criada é gravada em `/api/rooms`
+- todo mundo, em qualquer rede, carrega de lá (atualiza sozinho a cada 8s)
+- a senha nunca vai pro banco (só o hash)
 
-O trecho:
+Se aparecer **🔴 Erro no banco** = a API subiu mas o KV não está ligado (volte no passo 2).
+Se aparecer **🟡 Sem banco** = você está num preview local/sem Functions; no Pages de verdade some.
 
-> Using redirected Wrangler configuration.
-> Configuration being used: "dist/wrangler.json"
-> Original user's configuration: "wrangler.jsonc"
+## Testar a API
 
-aparece quando o projeto está ligado como **Workers** e ainda existe um `wrangler.jsonc` antigo no Git ou no cache do Cloudflare.
+```
+https://SEU-SITE.pages.dev/api/rooms
+```
+Deve responder `{"rooms":[...],"count":N}`. Se responder 503, o KV não está ligado.
 
-Para resolver:
+## Ver/editar as salas na mão
 
-1. Garanta que não existe mais `wrangler.jsonc`, `wrangler.json`, `wrangler.toml` ou pasta `.wrangler` no repositório.
-2. No painel do Cloudflare, crie o projeto como **Pages**, não como **Workers**.
-3. Se já criou como Workers, desconecte ou crie um novo projeto Pages apontando para o mesmo repositório.
-4. Faça um novo commit para forçar um build limpo.
+Cloudflare → Workers & Pages → KV → `livedc-rooms` → **View**. Cada sala é a chave `room:CODIGO`
+e a lista fica em `rooms:index`. Pode apagar chaves por ali.
+
+## (Opcional) Usar Firebase em vez do KV
+
+Se preferir, coloque a URL de um Realtime Database em `public/livedc-config.json` (`databaseUrl`).
+Quando preenchido, ele tem prioridade sobre o KV.

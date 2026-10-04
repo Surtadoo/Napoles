@@ -21,11 +21,13 @@ import {
   findSavedRoom,
   syncFromBundledFile,
   updateRoomLocation,
+  undeleteCode,
   type RecentRoom,
   type LobbyGroup,
 } from './utils/lobby';
 import { locateMe, prefetchLocation } from './utils/geo';
 import { useRoomDirectory } from './hooks/useRoomDirectory';
+import { useCloudRooms } from './hooks/useCloudRooms';
 import { MusicPlayerModal } from './components/MusicPlayerModal';
 import { ProModal } from './components/ProModal';
 import { NamePromptModal } from './components/NamePromptModal';
@@ -49,10 +51,40 @@ export function App() {
     initAntiInspectionAndProtection();
   }, []);
 
-  // Detecta se abriu por link de convite (tem ?room= na URL inicial) — lido UMA vez, na carga
-  const [initialInviteCode] = useState<string | null>(() => getRoomCodeFromUrl());
+  // Detecta se abriu por link de convite (tem ?room= na URL inicial) — lido UMA vez, na carga.
+  // Guardado também em sessionStorage: se o navegador embutido (WhatsApp/Instagram) recarregar
+  // a página e perder a URL, o código do convite sobrevive dentro desta aba.
+  const [initialInviteCode] = useState<string | null>(() => {
+    const fromUrl = getRoomCodeFromUrl();
+    try {
+      if (fromUrl) {
+        sessionStorage.setItem('livedc-invite-code', fromUrl);
+        return fromUrl;
+      }
+      const saved = sessionStorage.getItem('livedc-invite-code');
+      // só reaproveita se a URL está "limpa" (perdeu os params) — nunca sobrescreve um link novo
+      if (saved && /^\d{4,10}$/.test(saved) && !window.location.search && !window.location.hash) {
+        return saved;
+      }
+    } catch {
+      // ignora
+    }
+    return fromUrl;
+  });
   // tipo/nome/senha(hash) da sala que veio no link
-  const [inviteMeta] = useState(() => getRoomMetaFromUrl());
+  const [inviteMeta] = useState(() => {
+    const m = getRoomMetaFromUrl();
+    try {
+      if (getRoomCodeFromUrl()) sessionStorage.setItem('livedc-invite-meta', JSON.stringify(m));
+      else {
+        const saved = sessionStorage.getItem('livedc-invite-meta');
+        if (saved && !window.location.search && !window.location.hash) return JSON.parse(saved);
+      }
+    } catch {
+      // ignora
+    }
+    return m;
+  });
 
   // roomCode só é DEFINIDO quando a pessoa entra numa sala (evita conectar em sala errada).
   // '' = ainda não entrou.
@@ -79,11 +111,29 @@ export function App() {
   }, []);
 
   // DIRETÓRIO GLOBAL (P2P): todo navegador aberto troca a lista de salas públicas/privadas.
-  // É assim que as salas de uma pessoa aparecem pras outras sem precisar de servidor.
+  // Funciona como complemento em tempo real (quem está online recebe na hora).
   const roomDirectory = useRoomDirectory({
     enabled: true,
     onUpdated: refreshRoomLists,
   });
+
+  // BANCO NA NUVEM (fonte da verdade): toda sala criada é GRAVADA lá e todo mundo
+  // CARREGA de lá — qualquer rede, qualquer aparelho. Config em public/livedc-config.json.
+  const ownerIdRef = useRef<string>('');
+  if (!ownerIdRef.current) {
+    try {
+      const k = 'livedc-owner-id';
+      let v = localStorage.getItem(k);
+      if (!v) {
+        v = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        localStorage.setItem(k, v);
+      }
+      ownerIdRef.current = v;
+    } catch {
+      ownerIdRef.current = `tmp-${Math.random().toString(36).slice(2, 10)}`;
+    }
+  }
+  const cloudRooms = useCloudRooms({ onUpdated: refreshRoomLists, ownerId: ownerIdRef.current });
 
   // Ao abrir o site: puxa o livedc-rooms.json publicado junto e mescla com o local.
   // Assim, levando o site pra outro lugar, as salas/grupos já vêm salvos.
@@ -114,7 +164,8 @@ export function App() {
           if (!p) return;
           updateRoomLocation(code, p.lat, p.lng, p.place);
           refreshRoomLists();
-          roomDirectory.publishNow(); // espalha a posição pros outros
+          roomDirectory.publishNow(); // espalha a posição pros outros (P2P)
+          cloudRooms.patch(code, { lat: p.lat, lng: p.lng, place: p.place }); // grava no banco
         })
         .catch(() => {});
       locateMe({ preferGps: true })
@@ -123,11 +174,12 @@ export function App() {
           updateRoomLocation(code, p.lat, p.lng, p.place);
           refreshRoomLists();
           roomDirectory.publishNow();
+          cloudRooms.patch(code, { lat: p.lat, lng: p.lng, place: p.place });
         })
         .catch(() => {});
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshRoomLists, roomDirectory.publishNow]
+    [refreshRoomLists, roomDirectory.publishNow, cloudRooms.patch]
   );
 
   const roomMeta = useMemo(
@@ -639,6 +691,8 @@ export function App() {
     // - Só entrei: fica no arquivo (aparece na lista pública/privada e no mapa), mas não em "recentes".
     const existing = findSavedRoom(code);
     if (opts.asOwner) {
+      // criando de novo uma sala que eu tinha apagado → libera o código
+      undeleteCode(code);
       saveRecentRoom({
         name: label,
         code,
@@ -671,6 +725,17 @@ export function App() {
     refreshRoomLists();
     // sala nova/alterada → manda pro diretório agora (todo mundo online recebe)
     roomDirectory.publishNow();
+    // e GRAVA NO BANCO (quem abrir depois, em qualquer rede, carrega de lá)
+    if (opts.asOwner) {
+      cloudRooms.push(code).then((ok) => {
+        if (ok) showToast('Sala salva no banco — todo mundo já consegue ver.');
+        else if (cloudRooms.status === 'off') {
+          showToast('Banco de salas não configurado: a sala só aparece pra quem estiver online agora.');
+        } else if (cloudRooms.status === 'error') {
+          showToast('Não consegui gravar no banco. Confira a URL/regras em livedc-config.json.');
+        }
+      });
+    }
 
     setTimeout(() => {
       addSystemMessage(
@@ -693,6 +758,11 @@ export function App() {
   const handleUserJoin = (userName: string, password: string) => {
     // veio por link → entra direto na sala do link (senha já foi validada no modal)
     if (initialInviteCode) {
+      // consumiu o convite → limpa pra não reaparecer numa visita futura sem link
+      try {
+        sessionStorage.removeItem('livedc-invite-code');
+        sessionStorage.removeItem('livedc-invite-meta');
+      } catch {}
       enterRoom(userName, initialInviteCode, {
         name: inviteMeta.name || undefined,
         type: inviteMeta.type,
@@ -743,8 +813,20 @@ export function App() {
   };
 
   const handleRemoveRecent = (code: string) => {
+    const saved = findSavedRoom(code);
+    // 1) some daqui na hora + marca como apagada (não volta por P2P/banco/arquivo)
     removeRecentRoom(code);
     refreshRoomLists();
+    if (saved?.createdByMe) {
+      // 2) avisa quem está online agora (some da lista deles na hora)
+      roomDirectory.broadcastDelete(code, ownerIdRef.current);
+      // 3) apaga do banco (quem abrir depois não vê mais)
+      cloudRooms.remove(code).then((ok) => {
+        showToast(ok ? 'Sala apagada — sumiu pra todo mundo.' : 'Sala apagada daqui.');
+      });
+    } else {
+      showToast('Sala removida da sua lista.');
+    }
   };
 
 
@@ -1202,6 +1284,11 @@ export function App() {
         onCreateRoom={handleLobbyCreate}
         onJoinRoom={handleLobbyJoin}
         onRemoveRecent={handleRemoveRecent}
+        cloudStatus={cloudRooms.status}
+        onRefresh={() => {
+          cloudRooms.pull();
+          showToast('Atualizando salas do banco…');
+        }}
         onChangeName={() => {
           setIsLobbyOpen(false);
           setIsNameModalOpen(true);

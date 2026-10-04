@@ -1,0 +1,16 @@
+# HTML e config: nunca cachear → todo mundo pega a versão nova na hora
+/
+  Cache-Control: no-store, must-revalidate
+
+/index.html
+  Cache-Control: no-store, must-revalidate
+
+/livedc-config.json
+  Cache-Control: no-store, must-revalidate
+
+/livedc-rooms.json
+  Cache-Control: no-store, must-revalidate
+
+/api/*
+  Cache-Control: no-store
+  Access-Control-Allow-Origin: *

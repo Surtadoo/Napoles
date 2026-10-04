@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { joinRoom } from 'trystero';
-import { loadAllRooms, mergeIncomingRooms, type RecentRoom } from '../utils/lobby';
+import { loadAllRooms, mergeIncomingRooms, removeRoomFromOthers, type RecentRoom } from '../utils/lobby';
 
 /**
  * DIRETÓRIO DE SALAS COMPARTILHADO (P2P)
@@ -19,14 +19,15 @@ const DIR_APP_ID = 'livedc-directory-v1';
 const DIR_ROOM = 'livedc-global-rooms-directory';
 
 const RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.mostr.pub',
-  'wss://relay.primal.net',
   'wss://nostr.wine',
-  'wss://relay.nostr.band',
+  'wss://relay.primal.net',
   'wss://purplepag.es',
+  'wss://nos.lol',
+  'wss://nostr.bitcoiner.social',
+  'wss://relay.snort.social',
   'wss://nostr.mom',
+  'wss://offchain.pub',
+  'wss://relay.nostr.net',
 ];
 
 /** versão "pública" da sala: sem senha em texto, sem flags pessoais */
@@ -82,6 +83,7 @@ interface Options {
 export function useRoomDirectory({ enabled, onUpdated }: Options) {
   const roomRef = useRef<any>(null);
   const actionRef = useRef<any>(null);
+  const leavingRef = useRef<Promise<void> | null>(null);
   const onUpdatedRef = useRef(onUpdated);
   onUpdatedRef.current = onUpdated;
 
@@ -103,52 +105,95 @@ export function useRoomDirectory({ enabled, onUpdated }: Options) {
     } catch {}
   }, [snapshot]);
 
+  /** avisa todo mundo que uma sala foi apagada (some da lista deles na hora) */
+  const broadcastDelete = useCallback((code: string, ownerId: string) => {
+    const a = actionRef.current;
+    if (!a) return;
+    const send = () => {
+      try {
+        a.send({ kind: 'delete', code, ownerId, ts: Date.now() });
+      } catch {}
+    };
+    send();
+    [400, 1500, 4000].forEach((ms) => setTimeout(send, ms));
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     let room: any = null;
-    try {
-      room = joinRoom(
-        {
-          appId: DIR_APP_ID,
-          relayConfig: { urls: RELAYS, redundancy: RELAYS.length } as any,
-          trickleIce: true,
-        } as any,
-        DIR_ROOM
-      );
-    } catch {
-      return;
-    }
-    roomRef.current = room;
-    const action = room.makeAction('livedc-dir-v1');
-    actionRef.current = action;
+    let iv: ReturnType<typeof setInterval> | null = null;
 
-    try {
-      (action as any).onMessage = (data: any) => {
-        if (cancelled || !data || data.kind !== 'rooms' || !Array.isArray(data.rooms)) return;
-        const changed = mergeIncomingRooms(data.rooms);
-        if (changed) onUpdatedRef.current?.();
-      };
-    } catch {}
+    // espera a saída anterior terminar (mesmo motivo do useLiveRoom: o trystero
+    // reutiliza a instância enquanto `leave()` não completou → StrictMode entregava
+    // um canal já fechado e o diretório parava de sincronizar)
+    const prevLeaving = leavingRef.current;
 
-    try {
-      (room as any).onPeerJoin = (peerId: string) => {
-        if (cancelled) return;
-        // manda minha lista pra quem chegou (com retries)
-        [200, 900, 2500].forEach((ms) => setTimeout(() => !cancelled && broadcast(peerId), ms));
-      };
-    } catch {}
+    const doJoin = () => {
+      if (cancelled) return;
+      try {
+        room = joinRoom(
+          {
+            appId: DIR_APP_ID,
+            relayConfig: { urls: RELAYS, redundancy: RELAYS.length } as any,
+            trickleIce: true,
+          } as any,
+          DIR_ROOM
+        );
+      } catch {
+        return;
+      }
+      roomRef.current = room;
+      const action = room.makeAction('livedc-dir-v1');
+      actionRef.current = action;
 
-    // anúncio inicial + a cada 20s (mantém todo mundo em dia)
-    [500, 2000, 5000].forEach((ms) => setTimeout(() => !cancelled && broadcast(), ms));
-    const iv = setInterval(() => !cancelled && broadcast(), 20000);
+      try {
+        (action as any).onMessage = (data: any) => {
+          if (cancelled || !data) return;
+          if (data.kind === 'delete' && typeof data.code === 'string') {
+            const changed = removeRoomFromOthers(data.code);
+            if (changed) onUpdatedRef.current?.();
+            return;
+          }
+          if (data.kind !== 'rooms' || !Array.isArray(data.rooms)) return;
+          const changed = mergeIncomingRooms(data.rooms);
+          if (changed) onUpdatedRef.current?.();
+        };
+      } catch {}
+
+      try {
+        (room as any).onPeerJoin = (peerId: string) => {
+          if (cancelled) return;
+          [200, 900, 2500].forEach((ms) => setTimeout(() => !cancelled && broadcast(peerId), ms));
+        };
+      } catch {}
+
+      [500, 2000, 5000].forEach((ms) => setTimeout(() => !cancelled && broadcast(), ms));
+      iv = setInterval(() => !cancelled && broadcast(), 20000);
+    };
+
+    if (prevLeaving) prevLeaving.then(doJoin, doJoin);
+    else doJoin();
 
     return () => {
       cancelled = true;
-      clearInterval(iv);
-      try {
-        room.leave?.();
-      } catch {}
+      if (iv) clearInterval(iv);
+      const r = room;
+      if (r) {
+        let p: Promise<any>;
+        try {
+          p = Promise.resolve(r.leave?.());
+        } catch {
+          p = Promise.resolve();
+        }
+        const wrapped: Promise<void> = p
+          .catch(() => {})
+          .then(() => new Promise<void>((res) => setTimeout(res, 150)))
+          .then(() => {
+            if (leavingRef.current === wrapped) leavingRef.current = null;
+          });
+        leavingRef.current = wrapped;
+      }
       roomRef.current = null;
       actionRef.current = null;
     };
@@ -160,5 +205,5 @@ export function useRoomDirectory({ enabled, onUpdated }: Options) {
     [400, 1500].forEach((ms) => setTimeout(() => broadcast(), ms));
   }, [broadcast]);
 
-  return { publishNow };
+  return { publishNow, broadcastDelete };
 }

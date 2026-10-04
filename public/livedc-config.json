@@ -1,0 +1,5 @@
+{
+  "_leia": "CONFIGURAÇÃO DO BANCO DE SALAS (arquivo na nuvem). Um site estático NÃO consegue gravar arquivo no servidor, então as salas públicas/privadas são salvas num banco gratuito do Firebase (Realtime Database) que aceita gravação direto do navegador. Assim TODO MUNDO, em qualquer rede, vê as mesmas salas. Cole abaixo a URL do seu banco. Passo a passo: 1) https://console.firebase.google.com → Criar projeto (nome: livedc) → pode desmarcar Analytics. 2) Menu esquerdo: Criação → Realtime Database → Criar banco de dados → escolha a região (us-central1) → Iniciar no MODO DE TESTE → Ativar. 3) Copie a URL que aparece no topo (ex: https://livedc-xxxxx-default-rtdb.firebaseio.com) e cole em databaseUrl abaixo. 4) Aba Regras → cole: {\"rules\":{\"livedc\":{\".read\":true,\".write\":true}}} → Publicar. 5) Salve este arquivo e publique o site. Pronto: as salas passam a ser salvas no banco e carregadas dele.",
+  "databaseUrl": "",
+  "path": "livedc/rooms"
+}

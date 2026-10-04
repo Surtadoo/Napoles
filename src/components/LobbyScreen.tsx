@@ -46,6 +46,9 @@ interface LobbyScreenProps {
   onJoinRoom: (code: string, name?: string, password?: string) => void;
   onRemoveRecent: (code: string) => void;
   onChangeName: () => void;
+  /** status do banco de salas na nuvem */
+  cloudStatus?: 'checking' | 'ok' | 'off' | 'error';
+  onRefresh?: () => void;
 }
 
 type View = 'home' | 'public' | 'private' | 'map' | 'groups';
@@ -119,11 +122,17 @@ const RoomRow: React.FC<{
     </button>
     {removable && onRemove && (
       <button
-        onClick={() => onRemove(r.code)}
-        className="p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 sm:opacity-100 touch-manipulation"
-        title="Remover"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (confirm(`Apagar a sala "${r.name}" (${r.code})? Ela some pra todo mundo.`)) {
+            onRemove(r.code);
+          }
+        }}
+        className="p-2 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 touch-manipulation"
+        title="Apagar sala (some pra todo mundo)"
+        aria-label="Apagar sala"
       >
-        <Trash2 className="w-3.5 h-3.5" />
+        <Trash2 className="w-4 h-4" />
       </button>
     )}
     <ChevronRight className="w-4 h-4 text-gray-500 shrink-0" />
@@ -187,6 +196,8 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onJoinRoom,
   onRemoveRecent,
   onChangeName,
+  cloudStatus = 'checking',
+  onRefresh,
 }) => {
   const [roomType, setRoomType] = useState<'public' | 'private'>('public');
   const [roomNameInput, setRoomNameInput] = useState('');
@@ -306,6 +317,43 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         <span className="text-white font-black text-lg tracking-tight">LiveDC</span>
       </button>
       <div className="flex items-center gap-1.5">
+        {/* status do banco de salas */}
+        <button
+          onClick={onRefresh}
+          title={
+            cloudStatus === 'ok'
+              ? 'Banco de salas conectado — todo mundo vê as mesmas salas. Toque para atualizar.'
+              : cloudStatus === 'off'
+                ? 'Banco de salas NÃO configurado (public/livedc-config.json). As salas só aparecem pra quem estiver online agora.'
+                : cloudStatus === 'error'
+                  ? 'Erro ao falar com o banco — confira a URL e as regras no Firebase.'
+                  : 'Verificando banco de salas…'
+          }
+          className={`flex items-center gap-1.5 text-[11px] font-semibold rounded-xl px-2.5 py-1.5 border touch-manipulation ${
+            cloudStatus === 'ok'
+              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+              : cloudStatus === 'off'
+                ? 'bg-yellow-500/10 border-yellow-500/40 text-yellow-200'
+                : cloudStatus === 'error'
+                  ? 'bg-red-500/10 border-red-500/40 text-red-300'
+                  : 'bg-[#1b1f28] border-[#2a3145] text-gray-400'
+          }`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              cloudStatus === 'ok'
+                ? 'bg-emerald-400 animate-pulse'
+                : cloudStatus === 'off'
+                  ? 'bg-yellow-400'
+                  : cloudStatus === 'error'
+                    ? 'bg-red-400'
+                    : 'bg-gray-500 animate-pulse'
+            }`}
+          />
+          <span className="hidden sm:inline">
+            {cloudStatus === 'ok' ? 'Banco online' : cloudStatus === 'off' ? 'Sem banco' : cloudStatus === 'error' ? 'Erro no banco' : 'Conectando'}
+          </span>
+        </button>
         <button
           onClick={onChangeName}
           className="flex items-center gap-2 text-xs text-gray-300 hover:text-white bg-[#1b1f28] hover:bg-[#232838] border border-[#2a3145] rounded-xl px-3 py-1.5 touch-manipulation"
@@ -357,6 +405,23 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           {/* ---------------- HOME ---------------- */}
           {view === 'home' && (
             <>
+              {cloudStatus === 'off' && (
+                <div className="rounded-2xl bg-yellow-500/10 border border-yellow-500/30 p-3.5 text-[12px] text-yellow-100 leading-relaxed">
+                  <b>⚠️ Banco de salas desligado neste endereço.</b> As salas só aparecem pra quem
+                  estiver com o site aberto ao mesmo tempo. Pra <b>todo mundo</b> ver (qualquer rede,
+                  qualquer hora): no Cloudflare Pages, ligue um <b>KV</b> chamado{' '}
+                  <code className="text-yellow-200">LIVEDC_ROOMS</code> ao projeto (passo a passo em{' '}
+                  <code className="text-yellow-200">CLOUDFLARE.md</code>, 2 minutos). Depois é só
+                  publicar de novo.
+                </div>
+              )}
+              {cloudStatus === 'error' && (
+                <div className="rounded-2xl bg-red-500/10 border border-red-500/30 p-3.5 text-[12px] text-red-100 leading-relaxed">
+                  <b>❌ A API de salas existe mas o KV não está ligado.</b> No Cloudflare Pages →
+                  Settings → Bindings → KV namespace → nome <code>LIVEDC_ROOMS</code>. Depois publique
+                  de novo (veja <code className="text-red-200">CLOUDFLARE.md</code>).
+                </div>
+              )}
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">

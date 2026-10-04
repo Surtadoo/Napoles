@@ -37,16 +37,20 @@ export function hashPassword(pw: string): string {
   return h.toString(36);
 }
 
-/** Info da sala vinda no link: tipo (pública/privada), nome e hash da senha. */
+/** Info da sala vinda no link: tipo (pública/privada), nome e hash da senha. Lê ?query E #hash. */
 export function getRoomMetaFromUrl(): { type: 'public' | 'private'; name: string; pwHash: string } {
   try {
-    const p = new URLSearchParams(window.location.search);
-    const t = p.get('t');
-    const name = (p.get('n') || '').slice(0, 40);
-    const pwHash = p.get('k') || '';
-    return { type: t === 'pub' ? 'public' : 'private', name, pwHash };
+    const q = new URLSearchParams(window.location.search);
+    const h = new URLSearchParams((window.location.hash || '').replace(/^#\/?/, ''));
+    const get = (k: string) => q.get(k) || h.get(k) || '';
+    const t = get('t');
+    const name = get('n').slice(0, 40);
+    const pwHash = get('k');
+    // sem 't' no link: se tem hash de senha é privada; senão trata como pública (não bloqueia)
+    const type: 'public' | 'private' = t === 'pub' ? 'public' : t === 'priv' ? 'private' : pwHash ? 'private' : 'public';
+    return { type, name, pwHash };
   } catch {
-    return { type: 'private', name: '', pwHash: '' };
+    return { type: 'public', name: '', pwHash: '' };
   }
 }
 
@@ -61,9 +65,16 @@ export function buildShareUrl(
     if (meta?.type) u.searchParams.set('t', meta.type === 'public' ? 'pub' : 'priv');
     if (meta?.name) u.searchParams.set('n', meta.name.slice(0, 40));
     if (meta?.type === 'private' && meta?.password) u.searchParams.set('k', hashPassword(meta.password));
+    // Repete no #hash: navegadores embutidos (WhatsApp/Instagram) e alguns redirects
+    // às vezes DERRUBAM o ?query — o hash sobrevive. Lemos dos dois lugares.
+    const hp = new URLSearchParams();
+    hp.set('room', roomCode);
+    if (meta?.type) hp.set('t', meta.type === 'public' ? 'pub' : 'priv');
+    if (meta?.type === 'private' && meta?.password) hp.set('k', hashPassword(meta.password));
+    u.hash = hp.toString();
     return u.toString();
   } catch {
-    return `?room=${encodeURIComponent(roomCode)}`;
+    return `?room=${encodeURIComponent(roomCode)}#room=${encodeURIComponent(roomCode)}`;
   }
 }
 
@@ -72,16 +83,8 @@ export function persistRoomCodeInUrl(
   meta?: { type?: 'public' | 'private'; name?: string; password?: string }
 ) {
   try {
-    const url = new URL(window.location.href);
-    url.searchParams.set('room', roomCode);
-    if (meta?.type) url.searchParams.set('t', meta.type === 'public' ? 'pub' : 'priv');
-    if (meta?.name) url.searchParams.set('n', meta.name.slice(0, 40));
-    if (meta?.type === 'private' && meta?.password) {
-      url.searchParams.set('k', hashPassword(meta.password));
-    } else {
-      url.searchParams.delete('k');
-    }
-    window.history.replaceState({}, '', url.toString());
+    // a URL da barra = exatamente o link compartilhável (com ?query E #hash)
+    window.history.replaceState({}, '', buildShareUrl(roomCode, meta));
   } catch {
     // ignora
   }
